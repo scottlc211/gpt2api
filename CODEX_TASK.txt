@@ -1,0 +1,20 @@
+You are editing a small Next.js app in /mnt/d/AA_DEMO/gpt_img.
+
+Task:
+- Make it suitable for third-party image APIs and Cloudflare deployment.
+
+Requirements:
+1. Do NOT call arbitrary base URLs directly from the browser anymore.
+2. Add server-side proxy route handlers under app/api so the browser calls local routes only.
+3. Support environment variables from .env/.env.local: API_URL, API_KEY, AUTH_KEY.
+4. Every browser request to the local proxy must include Authorization: Bearer <auth-key>; the server should validate it against AUTH_KEY and return 401 if invalid.
+5. The server should forward requests to ${API_URL}/v1/images/generations and ${API_URL}/v1/images/edits with Authorization: Bearer ${API_KEY}.
+6. Keep image edit uploads as multipart/form-data with repeated image fields.
+7. Update the UI so users enter auth-key in the page, but API URL/API key are no longer entered in the browser. Persist auth-key locally.
+8. Add .env.example and update README with local setup plus Cloudflare deployment guidance.
+9. Prefer Edge-compatible route handlers if reasonable for Cloudflare; if a runtime declaration helps, add it.
+10. Keep the existing local conversation history UX.
+11. After editing, run npm run build and fix any errors.
+12. Make focused changes only, no extra framework churn.
+
+When done, print a concise summary with changed files and build result.
