@@ -5,6 +5,8 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
 };
 
-initOpenNextCloudflareForDev();
+if (process.env.NODE_ENV === "development") {
+  initOpenNextCloudflareForDev();
+}
 
 export default nextConfig;

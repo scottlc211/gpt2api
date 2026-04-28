@@ -9,9 +9,12 @@ function serverError(message: string, status = 500) {
   return NextResponse.json({ error: message }, { status });
 }
 
+function getAuthorization(request: NextRequest) {
+  return request.headers.get("authorization") || "";
+}
+
 function validateAuth(request: NextRequest, authKey: string) {
-  const authorization = request.headers.get("authorization") || "";
-  return authorization === `Bearer ${authKey}`;
+  return getAuthorization(request) === `Bearer ${authKey}`;
 }
 
 async function forwardResponse(response: Response) {
@@ -27,7 +30,8 @@ async function forwardResponse(response: Response) {
 
 export async function proxyJsonRequest(request: NextRequest, targetPath: string) {
   try {
-    const { apiUrl, apiKey, authKey } = getServerEnv();
+    const { apiUrl, authKey } = getServerEnv();
+    const authorization = getAuthorization(request);
     if (!validateAuth(request, authKey)) {
       return unauthorized();
     }
@@ -36,7 +40,7 @@ export async function proxyJsonRequest(request: NextRequest, targetPath: string)
     const upstream = await fetch(`${apiUrl}${targetPath}`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: authorization,
         "Content-Type": "application/json",
       },
       body,
@@ -51,7 +55,8 @@ export async function proxyJsonRequest(request: NextRequest, targetPath: string)
 
 export async function proxyFormRequest(request: NextRequest, targetPath: string) {
   try {
-    const { apiUrl, apiKey, authKey } = getServerEnv();
+    const { apiUrl, authKey } = getServerEnv();
+    const authorization = getAuthorization(request);
     if (!validateAuth(request, authKey)) {
       return unauthorized();
     }
@@ -60,7 +65,7 @@ export async function proxyFormRequest(request: NextRequest, targetPath: string)
     const upstream = await fetch(`${apiUrl}${targetPath}`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: authorization,
       },
       body: formData,
     });

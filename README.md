@@ -1,14 +1,14 @@
 # gpt_img
 
-一个最小可运行的 Next.js 绘图页 demo，现已改为通过服务端代理访问第三方图像接口，适合本地开发和 Cloudflare 友好部署。
+一个最小可运行的 Next.js 绘图页 demo，现已改为通过服务端代理访问 chatgpt2api 兼容图像接口，适合本地开发和 Cloudflare 友好部署。
 
 功能特性：
 - 文生图调用本地代理 POST /api/images/generations
 - 图生图调用本地代理 POST /api/images/edits
 - 服务端转发到上游 ${API_URL}/v1/images/generations 与 ${API_URL}/v1/images/edits
-- 浏览器每次请求都必须携带 Authorization: Bearer <auth-key>
+- 浏览器每次请求都必须携带 Authorization: Bearer ***
 - 服务端校验 AUTH_KEY，不匹配返回 401
-- 服务端使用 API_KEY 调用上游接口
+- 服务端不再使用 API_KEY 二次转发，而是沿用浏览器提交的 Bearer token 请求上游
 - 图生图继续使用 multipart/form-data，并保留重复 image 字段
 - 本地会话历史与参考图体验保持不变
 - 路由声明为 Edge runtime，更利于 Cloudflare 场景
@@ -24,15 +24,13 @@ cp .env.example .env.local
 `.env.local` 中需要：
 
 ```env
-API_URL=https://your-image-api.example.com
-API_KEY=your_upstream_api_key
-AUTH_KEY=your_browser_proxy_auth_key
+API_URL=https://your-chatgpt2api.example.com
+AUTH_KEY=your_b..._key
 ```
 
 说明：
-- API_URL: 上游图像 API 的基础地址，不要以 /v1/images/... 结尾
-- API_KEY: 服务端转发到上游时使用的密钥
-- AUTH_KEY: 浏览器调用本站代理接口时必须填写的 auth-key
+- API_URL: chatgpt2api 或其他 OpenAI 兼容图片接口的基础地址，不要以 /v1/images/... 结尾
+- AUTH_KEY: 浏览器调用本站代理接口时必须填写的 auth-key，同时也会作为 Bearer token 原样转发到上游
 
 ## 本地启动
 
@@ -57,17 +55,19 @@ npm run dev
 - POST /api/images/edits
 
 服务端会：
-1. 校验请求头 Authorization: Bearer <auth-key>
+1. 校验请求头 Authorization: Bearer ***
 2. 将请求转发到 API_URL 对应的上游接口
-3. 自动附带 Authorization: Bearer <API_KEY>
+3. 原样转发同一个 Authorization: Bearer ***
 4. 将上游响应原样返回给前端
+
+这和 basketikun/chatgpt2api 项目的使用方式一致：客户端直接用 Bearer token 访问兼容接口，不额外引入 API_KEY 中转。
 
 如果 auth-key 不正确，将返回 401 Unauthorized。
 
 ## Cloudflare 部署说明
 
 本项目已尽量采用 Cloudflare 友好的方式：
-- 前端不直连第三方 API，避免浏览器侧泄漏上游地址和 API_KEY
+- 前端不直连第三方 API，避免浏览器侧直接暴露目标基础地址
 - 路由处理器使用 Edge runtime
 - 代理逻辑基于标准 fetch / Request / Response / FormData
 
@@ -75,15 +75,15 @@ npm run dev
 1. 将项目部署到支持 Next.js App Router 与 Edge 路由的 Cloudflare 方案
 2. 在 Cloudflare 的项目环境变量中配置：
    - API_URL
-   - API_KEY
    - AUTH_KEY
-3. 不要把 API_KEY 暴露到客户端环境变量
-4. 前端用户访问页面时，输入与 AUTH_KEY 一致的 auth-key
+3. 前端用户访问页面时，输入与 AUTH_KEY 一致的 auth-key
+4. 若上游是 chatgpt2api，请确保其服务端也配置了相同或你预期的 Bearer 鉴权规则
 
 部署后检查：
 - 页面请求目标应为本站 `/api/images/*`
 - 上游 API 只应由服务端访问
 - 图生图上传应仍然为 multipart/form-data
+- 上游收到的 Authorization 应与前端提交值一致
 
 ## 构建
 

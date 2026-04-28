@@ -1,4 +1,4 @@
-type RequiredEnvKey = "API_URL" | "API_KEY" | "AUTH_KEY";
+type RequiredEnvKey = "API_URL" | "AUTH_KEY";
 
 function readEnv(name: RequiredEnvKey) {
   const value = process.env[name]?.trim();
@@ -11,7 +11,6 @@ function readEnv(name: RequiredEnvKey) {
 export function getServerEnv() {
   return {
     apiUrl: readEnv("API_URL").replace(/\/$/, ""),
-    apiKey: readEnv("API_KEY"),
     authKey: readEnv("AUTH_KEY"),
   };
 }

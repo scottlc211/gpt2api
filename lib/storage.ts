@@ -1,13 +1,15 @@
 export type StoredReferenceImage = {
   name: string;
   type: string;
-  dataUrl: string;
+  dataUrl?: string;
+  assetId?: string;
 };
 
 export type StoredResultImage = {
   id: string;
   status: "loading" | "success" | "error";
   b64_json?: string;
+  assetId?: string;
   error?: string;
 };
 
@@ -33,26 +35,141 @@ export type ImageConversation = {
   turns: ImageTurn[];
 };
 
+type AssetRecord = {
+  id: string;
+  value: string;
+};
+
 const STORAGE_KEY = "gpt-img:conversations";
 const ACTIVE_KEY = "gpt-img:active-id";
 const PROXY_AUTH_STORAGE_KEY = "gpt-img:auth-key";
 const SIZE_KEY = "gpt-img:last-size";
+const ASSET_DB_NAME = "gpt-img-assets";
+const ASSET_STORE_NAME = "assets";
 
 export const storageKeys = { STORAGE_KEY, ACTIVE_KEY, AUTH_KEY: PROXY_AUTH_STORAGE_KEY, SIZE_KEY };
 
-export function readConversations(): ImageConversation[] {
+function openAssetDb(): Promise<IDBDatabase | null> {
+  if (typeof window === "undefined" || typeof indexedDB === "undefined") return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    const request = indexedDB.open(ASSET_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(ASSET_STORE_NAME)) {
+        db.createObjectStore(ASSET_STORE_NAME, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resolve(null);
+  });
+}
+
+async function putAsset(id: string, value: string) {
+  const db = await openAssetDb();
+  if (!db) return;
+
+  await new Promise<void>((resolve) => {
+    const transaction = db.transaction(ASSET_STORE_NAME, "readwrite");
+    transaction.objectStore(ASSET_STORE_NAME).put({ id, value } satisfies AssetRecord);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => resolve();
+    transaction.onabort = () => resolve();
+  });
+}
+
+async function getAsset(id: string) {
+  const db = await openAssetDb();
+  if (!db) return undefined;
+
+  return new Promise<string | undefined>((resolve) => {
+    const transaction = db.transaction(ASSET_STORE_NAME, "readonly");
+    const request = transaction.objectStore(ASSET_STORE_NAME).get(id);
+    request.onsuccess = () => resolve((request.result as AssetRecord | undefined)?.value);
+    request.onerror = () => resolve(undefined);
+  });
+}
+
+async function persistConversationAssets(items: ImageConversation[]) {
+  return Promise.all(
+    items.map(async (conversation) => ({
+      ...conversation,
+      turns: await Promise.all(
+        conversation.turns.map(async (turn) => ({
+          ...turn,
+          referenceImages: await Promise.all(
+            turn.referenceImages.map(async (image, index) => {
+              const assetId = image.assetId || `ref:${turn.id}:${index}:${image.name}`;
+              if (image.dataUrl) {
+                await putAsset(assetId, image.dataUrl);
+              }
+              return {
+                name: image.name,
+                type: image.type,
+                assetId,
+              } satisfies StoredReferenceImage;
+            }),
+          ),
+          images: await Promise.all(
+            turn.images.map(async (image, index) => {
+              if (image.status !== "success" || !image.b64_json) {
+                return image;
+              }
+              const assetId = image.assetId || `result:${turn.id}:${index}:${image.id}`;
+              await putAsset(assetId, image.b64_json);
+              return {
+                id: image.id,
+                status: image.status,
+                assetId,
+              } satisfies StoredResultImage;
+            }),
+          ),
+        })),
+      ),
+    })),
+  );
+}
+
+async function hydrateConversationAssets(items: ImageConversation[]) {
+  return Promise.all(
+    items.map(async (conversation) => ({
+      ...conversation,
+      turns: await Promise.all(
+        conversation.turns.map(async (turn) => ({
+          ...turn,
+          referenceImages: await Promise.all(
+            turn.referenceImages.map(async (image) => ({
+              ...image,
+              dataUrl: image.dataUrl ?? (image.assetId ? await getAsset(image.assetId) : undefined),
+            })),
+          ),
+          images: await Promise.all(
+            turn.images.map(async (image) => ({
+              ...image,
+              b64_json: image.b64_json ?? (image.assetId ? await getAsset(image.assetId) : undefined),
+            })),
+          ),
+        })),
+      ),
+    })),
+  );
+}
+
+export async function readConversations(): Promise<ImageConversation[]> {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as ImageConversation[]) : [];
+    const items = raw ? (JSON.parse(raw) as ImageConversation[]) : [];
+    return hydrateConversationAssets(items);
   } catch {
     return [];
   }
 }
 
-export function writeConversations(items: ImageConversation[]) {
+export async function writeConversations(items: ImageConversation[]) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  const serializableItems = await persistConversationAssets(items);
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableItems));
 }
 
 export function makeId() {
