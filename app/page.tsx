@@ -43,15 +43,24 @@ export default function Page() {
   const selectedConversation = useMemo(() => conversations.find((item) => item.id === selectedId) ?? null, [conversations, selectedId]);
 
   useEffect(() => {
-    const items = readConversations();
-    setConversations(items);
-    setSelectedId(window.localStorage.getItem(storageKeys.ACTIVE_KEY) || items[0]?.id || null);
-    setAuthKey(window.localStorage.getItem(storageKeys.AUTH_KEY) || "");
-    setSize(window.localStorage.getItem(storageKeys.SIZE_KEY) || "");
+    let cancelled = false;
+
+    (async () => {
+      const items = await readConversations();
+      if (cancelled) return;
+      setConversations(items);
+      setSelectedId(window.localStorage.getItem(storageKeys.ACTIVE_KEY) || items[0]?.id || null);
+      setAuthKey(window.localStorage.getItem(storageKeys.AUTH_KEY) || "");
+      setSize(window.localStorage.getItem(storageKeys.SIZE_KEY) || "");
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    writeConversations(conversations);
+    void writeConversations(conversations);
   }, [conversations]);
 
   useEffect(() => {
@@ -122,7 +131,10 @@ export default function Page() {
     setCount("1");
     setSubmitting(true);
     try {
-      const files = referenceImages.map((image, index) => dataUrlToFile(image.dataUrl, image.name || `reference-${index + 1}.png`, image.type));
+      const files = referenceImages.map((image, index) => {
+        if (!image.dataUrl) throw new Error("参考图缓存丢失，请重新上传后再试");
+        return dataUrlToFile(image.dataUrl, image.name || `reference-${index + 1}.png`, image.type);
+      });
       const tasks = Array.from({ length: parsedCount }, async (_, index) => {
         const response =
           mode === "edit"
@@ -218,9 +230,15 @@ export default function Page() {
                 <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{turn.prompt}</p>
                 {turn.referenceImages.length > 0 ? (
                   <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-                    {turn.referenceImages.map((image, index) => (
-                      <img key={`${turn.id}-${index}`} src={image.dataUrl} alt={image.name} style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 16, border: "1px solid #e7e5e4" }} />
-                    ))}
+                    {turn.referenceImages.map((image, index) =>
+                      image.dataUrl ? (
+                        <img key={`${turn.id}-${index}`} src={image.dataUrl} alt={image.name} style={{ width: 96, height: 96, objectFit: "cover", borderRadius: 16, border: "1px solid #e7e5e4" }} />
+                      ) : (
+                        <div key={`${turn.id}-${index}`} style={{ width: 96, height: 96, display: "grid", placeItems: "center", borderRadius: 16, border: "1px solid #e7e5e4", color: "#78716c", fontSize: 12, background: "#fafaf9", textAlign: "center", padding: 8 }}>
+                          参考图未加载
+                        </div>
+                      ),
+                    )}
                   </div>
                 ) : null}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
