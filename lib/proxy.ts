@@ -30,7 +30,7 @@ async function forwardResponse(response: Response) {
 
 export async function proxyJsonRequest(request: NextRequest, targetPath: string) {
   try {
-    const { apiUrl, authKey } = getServerEnv();
+    const { apiUrl, authKey } = await getServerEnv();
     const authorization = getAuthorization(request);
     if (!validateAuth(request, authKey)) {
       return unauthorized();
@@ -55,7 +55,7 @@ export async function proxyJsonRequest(request: NextRequest, targetPath: string)
 
 export async function proxyFormRequest(request: NextRequest, targetPath: string) {
   try {
-    const { apiUrl, authKey } = getServerEnv();
+    const { apiUrl, authKey } = await getServerEnv();
     const authorization = getAuthorization(request);
     if (!validateAuth(request, authKey)) {
       return unauthorized();
