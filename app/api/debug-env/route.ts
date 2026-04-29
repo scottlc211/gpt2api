@@ -1,14 +1,12 @@
 import { NextResponse } from "next/server";
 import { readRuntimeEnv } from "@/lib/server-env";
 
-export const runtime = "edge";
-
 export async function GET() {
   try {
     return NextResponse.json(
       {
         ok: true,
-        runtime: "edge",
+        runtime: "nodejs",
         hasApiUrl: Boolean(await readRuntimeEnv("API_URL")),
         hasAuthKey: Boolean(await readRuntimeEnv("AUTH_KEY")),
         nodeEnv:
@@ -26,7 +24,7 @@ export async function GET() {
     return NextResponse.json(
       {
         ok: false,
-        runtime: "edge",
+        runtime: "nodejs",
         error: error instanceof Error ? error.message : "debug-env failed",
       },
       {

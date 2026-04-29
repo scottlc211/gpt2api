@@ -11,7 +11,7 @@
 - 服务端不再使用 API_KEY 二次转发，而是沿用浏览器提交的 Bearer token 请求上游
 - 图生图继续使用 multipart/form-data，并保留重复 image 字段
 - 本地会话历史与参考图体验保持不变
-- 路由声明为 Edge runtime，更利于 Cloudflare 场景
+- 路由保持 Next.js 默认 Node.js runtime，兼容 OpenNext Cloudflare Workers
 
 ## 环境变量
 
@@ -69,11 +69,11 @@ npm run dev
 
 本项目已尽量采用 Cloudflare 友好的方式：
 - 前端不直连第三方 API，避免浏览器侧直接暴露目标基础地址
-- 路由处理器使用 Edge runtime
+- 路由处理器使用 Next.js 默认 Node.js runtime
 - 代理逻辑基于标准 fetch / Request / Response / FormData
 
 推荐部署方式：
-1. 将项目部署到支持 Next.js App Router 与 Edge 路由的 Cloudflare 方案
+1. 将项目通过 `@opennextjs/cloudflare` 部署到 Cloudflare Workers
 2. 在 Cloudflare 的项目环境变量中配置：
    - API_URL
    - AUTH_KEY
@@ -94,4 +94,4 @@ npm run dev
 npm run build
 ```
 
-如果需要部署到 Cloudflare，请同时确认目标平台对当前 Next.js 版本与 Edge 路由支持情况。
+如果需要部署到 Cloudflare，请不要再给路由显式声明 `export const runtime = "edge"`；OpenNext Cloudflare 官方推荐使用 Next.js 默认 Node.js runtime。
