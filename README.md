@@ -30,7 +30,8 @@ AUTH_KEY=your_b..._key
 
 说明：
 - API_URL: chatgpt2api 或其他 OpenAI 兼容图片接口的基础地址，不要以 /v1/images/... 结尾
-- AUTH_KEY: 浏览器调用本站代理接口时必须填写的 auth-key，同时也会作为 Bearer token 原样转发到上游
+- AUTH_KEY: 浏览器调用本站代理接口时必须填写的 auth-key，服务端会先用它校验本地代理请求，再将同一个 Bearer token 原样转发到上游
+- API_KEY: 当前前端代理链路不会读取这个变量；如果 `.env` 里保留了 API_KEY，也不会参与图片请求鉴权
 
 ## 本地启动
 
@@ -78,6 +79,8 @@ npm run dev
    - AUTH_KEY
 3. 前端用户访问页面时，输入与 AUTH_KEY 一致的 auth-key
 4. 若上游是 chatgpt2api，请确保其服务端也配置了相同或你预期的 Bearer 鉴权规则
+
+补充说明：Cloudflare 生产环境下，Worker 绑定变量不一定总能从 `process.env` 读取；本项目服务端现已优先从 Cloudflare Worker `env` 读取 `API_URL` / `AUTH_KEY`，本地开发再回退到 `.env*`。
 
 部署后检查：
 - 页面请求目标应为本站 `/api/images/*`
