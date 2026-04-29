@@ -80,8 +80,6 @@ npm run dev
 3. 前端用户访问页面时，输入与 AUTH_KEY 一致的 auth-key
 4. 若上游是 chatgpt2api，请确保其服务端也配置了相同或你预期的 Bearer 鉴权规则
 
-补充说明：Cloudflare 生产环境下，Worker 绑定变量不一定总能从 `process.env` 读取；本项目服务端现已优先从 Cloudflare Worker `env` 读取 `API_URL` / `AUTH_KEY`，本地开发再回退到 `.env*`。
-
 部署后检查：
 - 页面请求目标应为本站 `/api/images/*`
 - 上游 API 只应由服务端访问
