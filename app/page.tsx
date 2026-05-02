@@ -43,6 +43,7 @@ export default function Page() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
+  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
 
   const parsedCount = useMemo(() => Math.max(1, Math.min(10, Number(count) || 1)), [count]);
   const selectedConversation = useMemo(
@@ -81,15 +82,16 @@ export default function Page() {
   }, [size]);
 
   useEffect(() => {
-    if (!previewImage) return undefined;
-
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPreviewImage(null);
+      if (event.key === "Escape") {
+        if (previewImage) setPreviewImage(null);
+        if (historyDrawerOpen) setHistoryDrawerOpen(false);
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [previewImage]);
+  }, [historyDrawerOpen, previewImage]);
 
   async function appendFiles(files: File[]) {
     const next = await Promise.all(
@@ -119,6 +121,11 @@ export default function Page() {
 
   function openPreview(src: string, alt: string) {
     setPreviewImage({ src, alt });
+  }
+
+  function selectConversation(id: string) {
+    setSelectedId(id);
+    setHistoryDrawerOpen(false);
   }
 
   async function handleSubmit() {
@@ -248,19 +255,50 @@ export default function Page() {
 
   return (
     <>
+      {!historyDrawerOpen ? (
+        <button
+          type="button"
+          className="history-trigger"
+          onClick={() => setHistoryDrawerOpen(true)}
+          aria-label="打开历史对话"
+        >
+          历史
+        </button>
+      ) : null}
+
+      {historyDrawerOpen ? (
+        <button
+          type="button"
+          className="history-backdrop"
+          onClick={() => setHistoryDrawerOpen(false)}
+          aria-label="关闭历史对话"
+        />
+      ) : null}
+
       <main className="page-shell">
-        <aside className="sidebar-panel">
+        <aside className={`sidebar-panel drawer-panel${historyDrawerOpen ? " is-open" : ""}`}>
           <div style={panelHeaderStyle}>
             <h2 style={{ margin: 0, fontSize: 18 }}>历史对话</h2>
-            <button
-              onClick={() => {
-                setSelectedId(null);
-                resetComposer();
-              }}
-              style={buttonStyle}
-            >
-              新建
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => {
+                  setSelectedId(null);
+                  resetComposer();
+                  setHistoryDrawerOpen(false);
+                }}
+                style={buttonStyle}
+              >
+                新建
+              </button>
+              <button
+                type="button"
+                className="drawer-close-button"
+                onClick={() => setHistoryDrawerOpen(false)}
+                aria-label="关闭历史对话"
+              >
+                ×
+              </button>
+            </div>
           </div>
 
           <div className="history-list">
@@ -268,7 +306,7 @@ export default function Page() {
             {conversations.map((conversation) => (
               <button
                 key={conversation.id}
-                onClick={() => setSelectedId(conversation.id)}
+                onClick={() => selectConversation(conversation.id)}
                 style={{
                   ...cardButtonStyle,
                   borderColor: selectedId === conversation.id ? "#1c1917" : "#e7e5e4",
@@ -328,11 +366,7 @@ export default function Page() {
                             onClick={() => openPreview(image.dataUrl!, image.name || `参考图 ${index + 1}`)}
                             style={thumbnailButtonStyle}
                           >
-                            <img
-                              src={image.dataUrl}
-                              alt={image.name || `参考图 ${index + 1}`}
-                              style={thumbnailImageStyle}
-                            />
+                            <img src={image.dataUrl} alt={image.name || `参考图 ${index + 1}`} style={thumbnailImageStyle} />
                           </button>
                         ) : (
                           <div key={`${turn.id}-${index}`} style={missingThumbStyle}>
@@ -350,11 +384,7 @@ export default function Page() {
                       return (
                         <div key={image.id} style={resultCardStyle}>
                           {image.status === "success" && image.b64_json ? (
-                            <button
-                              type="button"
-                              onClick={() => openPreview(imageSrc, image.id)}
-                              style={resultPreviewButtonStyle}
-                            >
+                            <button type="button" onClick={() => openPreview(imageSrc, image.id)} style={resultPreviewButtonStyle}>
                               <img src={imageSrc} alt={image.id} style={resultImageStyle} />
                             </button>
                           ) : (
@@ -462,9 +492,7 @@ export default function Page() {
                         )}
                       </button>
                       <button
-                        onClick={() =>
-                          setReferenceImages((current) => current.filter((_, currentIndex) => currentIndex !== index))
-                        }
+                        onClick={() => setReferenceImages((current) => current.filter((_, currentIndex) => currentIndex !== index))}
                         style={{ ...dangerButtonStyle, position: "absolute", top: -8, right: -8 }}
                         aria-label={`移除 ${image.name || `图片 ${index + 1}`}`}
                       >
