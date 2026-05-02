@@ -42,12 +42,11 @@ type AssetRecord = {
 
 const STORAGE_KEY = "gpt-img:conversations";
 const ACTIVE_KEY = "gpt-img:active-id";
-const PROXY_AUTH_STORAGE_KEY = "gpt-img:auth-key";
 const SIZE_KEY = "gpt-img:last-size";
 const ASSET_DB_NAME = "gpt-img-assets";
 const ASSET_STORE_NAME = "assets";
 
-export const storageKeys = { STORAGE_KEY, ACTIVE_KEY, AUTH_KEY: PROXY_AUTH_STORAGE_KEY, SIZE_KEY };
+export const storageKeys = { STORAGE_KEY, ACTIVE_KEY, SIZE_KEY };
 
 function openAssetDb(): Promise<IDBDatabase | null> {
   if (typeof window === "undefined" || typeof indexedDB === "undefined") return Promise.resolve(null);

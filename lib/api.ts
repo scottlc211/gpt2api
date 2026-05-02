@@ -34,19 +34,12 @@ export async function requestJson<T>(url: string, init: RequestInit): Promise<T>
   return data as T;
 }
 
-function authHeaders(authKey: string, extraHeaders?: HeadersInit): HeadersInit {
-  return {
-    Authorization: `Bearer ${authKey}`,
-    ...(extraHeaders || {}),
-  };
-}
-
-export async function generateImage(authKey: string, payload: GeneratePayload) {
+export async function generateImage(payload: GeneratePayload) {
   return requestJson<ImageApiResponse>("/api/images/generations", {
     method: "POST",
-    headers: authHeaders(authKey, {
+    headers: {
       "Content-Type": "application/json",
-    }),
+    },
     body: JSON.stringify({
       prompt: payload.prompt,
       ...(payload.model ? { model: payload.model } : {}),
@@ -57,7 +50,7 @@ export async function generateImage(authKey: string, payload: GeneratePayload) {
   });
 }
 
-export async function editImage(authKey: string, files: File[], payload: GeneratePayload) {
+export async function editImage(files: File[], payload: GeneratePayload) {
   const formData = new FormData();
   for (const file of files) {
     formData.append("image", file);
@@ -69,7 +62,6 @@ export async function editImage(authKey: string, files: File[], payload: Generat
 
   return requestJson<ImageApiResponse>("/api/images/edits", {
     method: "POST",
-    headers: authHeaders(authKey),
     body: formData,
   });
 }

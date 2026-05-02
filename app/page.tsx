@@ -33,7 +33,6 @@ function formatTime(value: string) {
 
 export default function Page() {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [authKey, setAuthKey] = useState("");
   const [mode, setMode] = useState<"generate" | "edit">("generate");
   const [prompt, setPrompt] = useState("");
   const [count, setCount] = useState("1");
@@ -59,7 +58,6 @@ export default function Page() {
       if (cancelled) return;
       setConversations(items);
       setSelectedId(window.localStorage.getItem(storageKeys.ACTIVE_KEY) || items[0]?.id || null);
-      setAuthKey(window.localStorage.getItem(storageKeys.AUTH_KEY) || "");
       setSize(window.localStorage.getItem(storageKeys.SIZE_KEY) || "");
     })();
 
@@ -71,11 +69,6 @@ export default function Page() {
   useEffect(() => {
     void writeConversations(conversations);
   }, [conversations]);
-
-  useEffect(() => {
-    if (authKey) window.localStorage.setItem(storageKeys.AUTH_KEY, authKey);
-    else window.localStorage.removeItem(storageKeys.AUTH_KEY);
-  }, [authKey]);
 
   useEffect(() => {
     if (selectedId) window.localStorage.setItem(storageKeys.ACTIVE_KEY, selectedId);
@@ -130,12 +123,7 @@ export default function Page() {
 
   async function handleSubmit() {
     setError("");
-    const trimmedAuthKey = authKey.trim();
     const trimmedPrompt = prompt.trim();
-    if (!trimmedAuthKey) {
-      setError("请输入 auth key");
-      return;
-    }
     if (!trimmedPrompt) {
       setError("请输入提示词");
       return;
@@ -189,14 +177,15 @@ export default function Page() {
       const tasks = Array.from({ length: parsedCount }, async (_, index) => {
         const response =
           mode === "edit"
-            ? await editImage(trimmedAuthKey, files, { prompt: trimmedPrompt, model: "gpt-image-2", size, n: 1 })
-            : await generateImage(trimmedAuthKey, {
+            ? await editImage(files, { prompt: trimmedPrompt, model: "gpt-image-2", size, n: 1 })
+            : await generateImage({
                 prompt: trimmedPrompt,
                 model: "gpt-image-2",
                 size,
                 n: 1,
                 response_format: "b64_json",
               });
+
         const first = response.data?.[0];
         if (!first?.b64_json) throw new Error("接口没有返回 b64_json");
         return { id: `${turnId}-${index}`, status: "success" as const, b64_json: first.b64_json };
@@ -306,9 +295,7 @@ export default function Page() {
 
         <section className="chat-panel">
           <div className="chat-thread">
-            {!selectedConversation ? (
-              <div style={emptyTextStyle}>Turn ideas into images。左侧会保留本地历史。</div>
-            ) : null}
+            {!selectedConversation ? <div style={emptyTextStyle}>Turn ideas into images。左侧会保留本地历史。</div> : null}
 
             <div style={turnListStyle}>
               {selectedConversation?.turns.map((turn, turnIndex) => (
@@ -393,16 +380,6 @@ export default function Page() {
 
           <div className="composer-panel">
             <div style={composerInnerStyle}>
-              <label style={labelStyle}>
-                Auth Key
-                <input
-                  value={authKey}
-                  onChange={(event) => setAuthKey(event.target.value)}
-                  style={inputStyle}
-                  placeholder="输入部署时配置的 AUTH_KEY"
-                />
-              </label>
-
               <textarea
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
@@ -666,13 +643,6 @@ const inputStyle: CSSProperties = {
   borderRadius: 14,
   padding: "12px 14px",
   background: "white",
-};
-
-const labelStyle: CSSProperties = {
-  display: "grid",
-  gap: 8,
-  fontSize: 14,
-  color: "#44403c",
 };
 
 const labelInlineStyle: CSSProperties = {

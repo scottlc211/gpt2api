@@ -1,20 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerEnv } from "@/lib/server-env";
 
-function unauthorized() {
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
-
 function serverError(message: string, status = 500) {
   return NextResponse.json({ error: message }, { status });
-}
-
-function getAuthorization(request: NextRequest) {
-  return request.headers.get("authorization") || "";
-}
-
-function validateAuth(request: NextRequest, authKey: string) {
-  return getAuthorization(request) === `Bearer ${authKey}`;
 }
 
 async function forwardResponse(response: Response) {
@@ -31,16 +19,11 @@ async function forwardResponse(response: Response) {
 export async function proxyJsonRequest(request: NextRequest, targetPath: string) {
   try {
     const { apiUrl, authKey } = await getServerEnv();
-    const authorization = getAuthorization(request);
-    if (!validateAuth(request, authKey)) {
-      return unauthorized();
-    }
-
     const body = await request.text();
     const upstream = await fetch(`${apiUrl}${targetPath}`, {
       method: "POST",
       headers: {
-        Authorization: authorization,
+        Authorization: `Bearer ${authKey}`,
         "Content-Type": "application/json",
       },
       body,
@@ -56,16 +39,11 @@ export async function proxyJsonRequest(request: NextRequest, targetPath: string)
 export async function proxyFormRequest(request: NextRequest, targetPath: string) {
   try {
     const { apiUrl, authKey } = await getServerEnv();
-    const authorization = getAuthorization(request);
-    if (!validateAuth(request, authKey)) {
-      return unauthorized();
-    }
-
     const formData = await request.formData();
     const upstream = await fetch(`${apiUrl}${targetPath}`, {
       method: "POST",
       headers: {
-        Authorization: authorization,
+        Authorization: `Bearer ${authKey}`,
       },
       body: formData,
     });
