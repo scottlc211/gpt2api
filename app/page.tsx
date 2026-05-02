@@ -33,6 +33,7 @@ function formatTime(value: string) {
 
 export default function Page() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatThreadRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<"generate" | "edit">("generate");
   const [prompt, setPrompt] = useState("");
   const [count, setCount] = useState("1");
@@ -80,6 +81,18 @@ export default function Page() {
     if (size) window.localStorage.setItem(storageKeys.SIZE_KEY, size);
     else window.localStorage.removeItem(storageKeys.SIZE_KEY);
   }, [size]);
+
+  useEffect(() => {
+    if (!selectedConversation) return;
+
+    const frameId = window.requestAnimationFrame(() => {
+      const container = chatThreadRef.current;
+      if (!container) return;
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [selectedConversation]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -332,7 +345,7 @@ export default function Page() {
         </aside>
 
         <section className="chat-panel">
-          <div className="chat-thread">
+          <div ref={chatThreadRef} className="chat-thread">
             {!selectedConversation ? <div style={emptyTextStyle}>Turn ideas into images。左侧会保留本地历史。</div> : null}
 
             <div style={turnListStyle}>
