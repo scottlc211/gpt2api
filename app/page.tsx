@@ -58,8 +58,12 @@ export default function Page() {
     (async () => {
       const items = await readConversations();
       if (cancelled) return;
+
+      const storedSelectedId = window.localStorage.getItem(storageKeys.ACTIVE_KEY);
+      const nextSelectedId = items.some((item) => item.id === storedSelectedId) ? storedSelectedId : items[0]?.id || null;
+
       setConversations(items);
-      setSelectedId(window.localStorage.getItem(storageKeys.ACTIVE_KEY) || items[0]?.id || null);
+      setSelectedId(nextSelectedId);
       setSize(window.localStorage.getItem(storageKeys.SIZE_KEY) || "");
     })();
 
@@ -96,10 +100,9 @@ export default function Page() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        if (previewImage) setPreviewImage(null);
-        if (historyDrawerOpen) setHistoryDrawerOpen(false);
-      }
+      if (event.key !== "Escape") return;
+      if (previewImage) setPreviewImage(null);
+      if (historyDrawerOpen) setHistoryDrawerOpen(false);
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -139,6 +142,23 @@ export default function Page() {
   function selectConversation(id: string) {
     setSelectedId(id);
     setHistoryDrawerOpen(false);
+  }
+
+  function deleteConversation(id: string) {
+    setConversations((current) => {
+      const next = current.filter((item) => item.id !== id);
+      if (selectedId === id) {
+        setSelectedId(next[0]?.id || null);
+      }
+      return next;
+    });
+  }
+
+  function clearHistory() {
+    setConversations([]);
+    setSelectedId(null);
+    setHistoryDrawerOpen(false);
+    resetComposer();
   }
 
   async function handleSubmit() {
@@ -212,7 +232,7 @@ export default function Page() {
       });
 
       const settled = await Promise.allSettled(tasks);
-      const successImages = settled.map((item, index) =>
+      const nextImages = settled.map((item, index) =>
         item.status === "fulfilled"
           ? item.value
           : {
@@ -221,7 +241,7 @@ export default function Page() {
               error: item.reason instanceof Error ? item.reason.message : "生成失败",
             },
       );
-      const failedCount = successImages.filter((item) => item.status === "error").length;
+      const failedCount = nextImages.filter((item) => item.status === "error").length;
 
       const nextConversation: ImageConversation = {
         ...draftConversation,
@@ -232,7 +252,7 @@ export default function Page() {
                 ...item,
                 status: failedCount > 0 ? "error" : "success",
                 error: failedCount > 0 ? `其中 ${failedCount} 张生成失败` : undefined,
-                images: successImages,
+                images: nextImages,
               }
             : item,
         ),
@@ -259,6 +279,7 @@ export default function Page() {
             : item,
         ),
       };
+
       updateConversation(failedConversation);
       setError(message);
     } finally {
@@ -269,30 +290,20 @@ export default function Page() {
   return (
     <>
       {!historyDrawerOpen ? (
-        <button
-          type="button"
-          className="history-trigger"
-          onClick={() => setHistoryDrawerOpen(true)}
-          aria-label="打开历史对话"
-        >
+        <button type="button" className="history-trigger" onClick={() => setHistoryDrawerOpen(true)} aria-label="打开历史对话">
           历史
         </button>
       ) : null}
 
       {historyDrawerOpen ? (
-        <button
-          type="button"
-          className="history-backdrop"
-          onClick={() => setHistoryDrawerOpen(false)}
-          aria-label="关闭历史对话"
-        />
+        <button type="button" className="history-backdrop" onClick={() => setHistoryDrawerOpen(false)} aria-label="关闭历史对话" />
       ) : null}
 
       <main className="page-shell">
         <aside className={`sidebar-panel drawer-panel${historyDrawerOpen ? " is-open" : ""}`}>
           <div style={panelHeaderStyle}>
             <h2 style={{ margin: 0, fontSize: 18 }}>历史对话</h2>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={sidebarActionsStyle}>
               <button
                 onClick={() => {
                   setSelectedId(null);
@@ -303,12 +314,10 @@ export default function Page() {
               >
                 新建
               </button>
-              <button
-                type="button"
-                className="drawer-close-button"
-                onClick={() => setHistoryDrawerOpen(false)}
-                aria-label="关闭历史对话"
-              >
+              <button onClick={clearHistory} style={buttonStyle}>
+                清空
+              </button>
+              <button type="button" className="drawer-close-button" onClick={() => setHistoryDrawerOpen(false)} aria-label="关闭历史对话">
                 ×
               </button>
             </div>
@@ -317,29 +326,32 @@ export default function Page() {
           <div className="history-list">
             {conversations.length === 0 ? <div style={emptyTextStyle}>还没有记录</div> : null}
             {conversations.map((conversation) => (
-              <button
+              <div
                 key={conversation.id}
-                onClick={() => selectConversation(conversation.id)}
                 style={{
-                  ...cardButtonStyle,
+                  ...historyCardStyle,
                   borderColor: selectedId === conversation.id ? "#1c1917" : "#e7e5e4",
                   background: selectedId === conversation.id ? "#fafaf9" : "white",
                 }}
               >
-                <div
-                  style={{
-                    fontWeight: 600,
-                    textAlign: "left",
-                    display: "-webkit-box",
-                    WebkitLineClamp: 2,
-                    WebkitBoxOrient: "vertical",
-                    overflow: "hidden",
-                  }}
-                >
-                  {conversation.title}
-                </div>
-                <div style={{ fontSize: 12, color: "#78716c", marginTop: 4 }}>{formatTime(conversation.updatedAt)}</div>
-              </button>
+                <button type="button" onClick={() => selectConversation(conversation.id)} style={historySelectButtonStyle}>
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      display: "-webkit-box",
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {conversation.title}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#78716c", marginTop: 4 }}>{formatTime(conversation.updatedAt)}</div>
+                </button>
+                <button type="button" onClick={() => deleteConversation(conversation.id)} style={historyDeleteButtonStyle} aria-label={`删除 ${conversation.title}`}>
+                  ×
+                </button>
+              </div>
             ))}
           </div>
         </aside>
@@ -454,14 +466,7 @@ export default function Page() {
                 </button>
                 <label style={labelInlineStyle}>
                   张数
-                  <input
-                    value={count}
-                    onChange={(event) => setCount(event.target.value)}
-                    type="number"
-                    min={1}
-                    max={10}
-                    style={{ ...inputStyle, width: 72 }}
-                  />
+                  <input value={count} onChange={(event) => setCount(event.target.value)} type="number" min={1} max={10} style={{ ...inputStyle, width: 72 }} />
                 </label>
                 <label style={labelInlineStyle}>
                   比例
@@ -555,6 +560,14 @@ const panelHeaderStyle: CSSProperties = {
   alignItems: "center",
   gap: 12,
   marginBottom: 12,
+};
+
+const sidebarActionsStyle: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  alignItems: "center",
+  flexWrap: "wrap",
+  justifyContent: "flex-end",
 };
 
 const emptyTextStyle: CSSProperties = {
@@ -714,13 +727,36 @@ const dangerButtonStyle: CSSProperties = {
   lineHeight: 1,
 };
 
-const cardButtonStyle: CSSProperties = {
+const historyCardStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) auto",
+  gap: 8,
+  alignItems: "start",
   border: "1px solid #e7e5e4",
   borderRadius: 18,
   padding: 12,
-  height: 72,
+  minHeight: 72,
+  overflow: "hidden",
+};
+
+const historySelectButtonStyle: CSSProperties = {
+  border: "none",
+  background: "transparent",
+  padding: 0,
+  textAlign: "left",
+  cursor: "pointer",
+  minWidth: 0,
+};
+
+const historyDeleteButtonStyle: CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: 999,
+  border: "1px solid #d6d3d1",
   background: "white",
   cursor: "pointer",
-  textAlign: "left",
-  overflow: "hidden",
+  display: "grid",
+  placeItems: "center",
+  lineHeight: 1,
+  flexShrink: 0,
 };

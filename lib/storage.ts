@@ -45,6 +45,7 @@ const ACTIVE_KEY = "gpt-img:active-id";
 const SIZE_KEY = "gpt-img:last-size";
 const ASSET_DB_NAME = "gpt-img-assets";
 const ASSET_STORE_NAME = "assets";
+const MAX_CONVERSATIONS = 20;
 
 export const storageKeys = { STORAGE_KEY, ACTIVE_KEY, SIZE_KEY };
 
@@ -87,6 +88,73 @@ async function getAsset(id: string) {
     request.onsuccess = () => resolve((request.result as AssetRecord | undefined)?.value);
     request.onerror = () => resolve(undefined);
   });
+}
+
+async function listAssetIds() {
+  const db = await openAssetDb();
+  if (!db) return [] as string[];
+
+  return new Promise<string[]>((resolve) => {
+    const transaction = db.transaction(ASSET_STORE_NAME, "readonly");
+    const store = transaction.objectStore(ASSET_STORE_NAME);
+    const request = store.openCursor();
+    const ids: string[] = [];
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve(ids);
+        return;
+      }
+      ids.push(String(cursor.key));
+      cursor.continue();
+    };
+    request.onerror = () => resolve(ids);
+  });
+}
+
+async function deleteAssets(ids: string[]) {
+  if (ids.length === 0) return;
+
+  const db = await openAssetDb();
+  if (!db) return;
+
+  await new Promise<void>((resolve) => {
+    const transaction = db.transaction(ASSET_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(ASSET_STORE_NAME);
+    for (const id of ids) store.delete(id);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => resolve();
+    transaction.onabort = () => resolve();
+  });
+}
+
+function limitConversations(items: ImageConversation[]) {
+  return sortConversations(items).slice(0, MAX_CONVERSATIONS);
+}
+
+function collectReferencedAssetIds(items: ImageConversation[]) {
+  const ids = new Set<string>();
+
+  for (const conversation of items) {
+    for (const turn of conversation.turns) {
+      for (const image of turn.referenceImages) {
+        if (image.assetId) ids.add(image.assetId);
+      }
+      for (const image of turn.images) {
+        if (image.assetId) ids.add(image.assetId);
+      }
+    }
+  }
+
+  return ids;
+}
+
+async function pruneUnreferencedAssets(items: ImageConversation[]) {
+  const referencedIds = collectReferencedAssetIds(items);
+  const storedIds = await listAssetIds();
+  const staleIds = storedIds.filter((id) => !referencedIds.has(id));
+  await deleteAssets(staleIds);
 }
 
 async function persistConversationAssets(items: ImageConversation[]) {
@@ -159,7 +227,8 @@ export async function readConversations(): Promise<ImageConversation[]> {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     const items = raw ? (JSON.parse(raw) as ImageConversation[]) : [];
-    return hydrateConversationAssets(items);
+    const limitedItems = limitConversations(items);
+    return hydrateConversationAssets(limitedItems);
   } catch {
     return [];
   }
@@ -167,8 +236,9 @@ export async function readConversations(): Promise<ImageConversation[]> {
 
 export async function writeConversations(items: ImageConversation[]) {
   if (typeof window === "undefined") return;
-  const serializableItems = await persistConversationAssets(items);
+  const serializableItems = await persistConversationAssets(limitConversations(items));
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableItems));
+  await pruneUnreferencedAssets(serializableItems);
 }
 
 export function makeId() {
