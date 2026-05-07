@@ -22,9 +22,9 @@ const navStyle: CSSProperties = {
   alignItems: "center",
   padding: 8,
   borderRadius: 999,
-  background: "rgba(255,255,255,0.85)",
-  border: "1px solid rgba(231,229,228,0.95)",
-  boxShadow: "0 10px 30px rgba(41, 37, 36, 0.08)",
+  background: "rgba(255,255,255,0.88)",
+  border: "1px solid rgba(231,229,228,0.96)",
+  boxShadow: "0 12px 30px rgba(41, 37, 36, 0.08)",
   backdropFilter: "blur(10px)",
 };
 
@@ -37,14 +37,17 @@ const tabStyle: CSSProperties = {
   fontSize: 14,
   fontWeight: 600,
   transition: "all 160ms ease",
+  cursor: "pointer",
 };
 
 const activeTabStyle: CSSProperties = {
-  background: "#1c1917",
+  background: "linear-gradient(135deg, #171717, #2b2b2b)",
   color: "white",
+  boxShadow: "0 10px 18px rgba(23, 23, 23, 0.2)",
 };
 
 const inactiveTabStyle: CSSProperties = {
   background: "transparent",
   color: "#44403c",
+  border: "1px solid transparent",
 };

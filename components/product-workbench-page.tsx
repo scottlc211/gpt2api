@@ -1515,9 +1515,11 @@ const missingPanelStyle: CSSProperties = {
 
 const workbenchShellStyle: CSSProperties = {
   minHeight: "100vh",
-  padding: "20px 18px 24px",
+  padding: "20px 18px 28px",
   display: "grid",
   gap: 16,
+  maxWidth: 1720,
+  margin: "0 auto",
 };
 
 const tabsWrapStyle: CSSProperties = {
@@ -1562,14 +1564,15 @@ const pillStyle: CSSProperties = {
 
 const pageTitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 30,
+  fontSize: 34,
   letterSpacing: "-0.04em",
 };
 
 const pageDescStyle: CSSProperties = {
   margin: "8px 0 0",
-  color: "#78716c",
+  color: "#57534e",
   fontSize: 14,
+  lineHeight: 1.65,
 };
 
 const headerActionsStyle: CSSProperties = {
@@ -1582,7 +1585,7 @@ const headerActionsStyle: CSSProperties = {
 const statusBarStyle: CSSProperties = {
   borderRadius: 18,
   border: "1px solid rgba(231,229,228,0.9)",
-  background: "rgba(255,255,255,0.9)",
+  background: "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(251,250,247,0.92))",
   padding: "12px 16px",
   display: "flex",
   gap: 12,
@@ -1602,11 +1605,12 @@ const canvasPanelStyle: CSSProperties = {
   minWidth: 0,
   borderRadius: 28,
   border: "1px solid rgba(231,229,228,0.9)",
-  background: "rgba(255,255,255,0.94)",
+  background: "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(252,251,249,0.94))",
   padding: 16,
   display: "grid",
   gridTemplateRows: "auto minmax(0, 1fr)",
   gap: 14,
+  boxShadow: "0 14px 36px rgba(41, 37, 36, 0.07)",
 };
 
 const canvasToolbarStyle: CSSProperties = {
@@ -1628,12 +1632,14 @@ const toolbarChipRowStyle: CSSProperties = {
 };
 
 const chipButtonStyle: CSSProperties = {
-  border: "1px solid #d6d3d1",
+  border: "1px solid rgba(212,175,55,0.24)",
   borderRadius: 999,
   padding: "10px 14px",
-  background: "white",
+  background: "rgba(255,250,237,0.88)",
   cursor: "pointer",
   fontSize: 13,
+  color: "#8a6914",
+  fontWeight: 600,
 };
 
 const canvasScrollerStyle: CSSProperties = {
@@ -1678,6 +1684,7 @@ const nodeCardStyle: CSSProperties = {
   userSelect: "none",
   display: "grid",
   gap: 12,
+  backdropFilter: "blur(10px)",
 };
 
 const nodeHeaderStyle: CSSProperties = {
@@ -1725,13 +1732,14 @@ const sidePanelStyle: CSSProperties = {
   minWidth: 0,
   borderRadius: 28,
   border: "1px solid rgba(231,229,228,0.9)",
-  background: "rgba(255,255,255,0.96)",
+  background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(250,249,246,0.96))",
   padding: 18,
   display: "grid",
   gap: 16,
   alignContent: "start",
   maxHeight: "calc(100vh - 120px)",
   overflow: "auto",
+  boxShadow: "0 14px 36px rgba(41, 37, 36, 0.07)",
 };
 
 const inspectorHeaderStyle: CSSProperties = {
@@ -1811,16 +1819,17 @@ const primaryButtonStyle: CSSProperties = {
   border: "none",
   borderRadius: 999,
   padding: "12px 16px",
-  background: "#1c1917",
+  background: "linear-gradient(135deg, #171717, #2b2b2b)",
   color: "white",
   cursor: "pointer",
   fontWeight: 600,
+  boxShadow: "0 10px 20px rgba(23, 23, 23, 0.18)",
 };
 const ghostButtonStyle: CSSProperties = {
   border: "1px solid #d6d3d1",
   borderRadius: 999,
   padding: "10px 14px",
-  background: "white",
+  background: "rgba(255,255,255,0.9)",
   cursor: "pointer",
 };
 const dangerMiniStyle: CSSProperties = {

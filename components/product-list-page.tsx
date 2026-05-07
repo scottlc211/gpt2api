@@ -27,6 +27,8 @@ export function ProductListPage() {
   const [products, setProducts] = useState<ProductRecord[]>([]);
   const [draftName, setDraftName] = useState("");
   const [ready, setReady] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [pageMessage, setPageMessage] = useState("商品会保存在浏览器本地，可直接进入工作台继续编辑。");
 
   useEffect(() => {
     let cancelled = false;
@@ -55,11 +57,26 @@ export function ProductListPage() {
     };
   }, [products]);
 
-  function createProduct() {
+  async function createProduct() {
+    if (creating) return;
+
     const product = createDefaultProduct(draftName.trim() || `电商商品 ${products.length + 1}`);
-    setProducts((current) => [product, ...current]);
+    const nextProducts = [product, ...products];
+    setCreating(true);
+    setPageMessage("正在创建商品并初始化默认工作流...");
+    setProducts(nextProducts);
     setDraftName("");
-    router.push(`/products/${product.id}`);
+
+    try {
+      await writeProducts(nextProducts);
+      setPageMessage(`已创建「${product.name}」，即将进入工作台。`);
+      router.push(`/products/${product.id}`);
+    } catch (error) {
+      setPageMessage(error instanceof Error ? error.message : "创建商品失败，请稍后重试。");
+      setProducts(products);
+    } finally {
+      setCreating(false);
+    }
   }
 
   function deleteProduct(productId: string) {
@@ -79,6 +96,11 @@ export function ProductListPage() {
           <div style={badgeStyle}>商品工作台 MVP</div>
           <h1 style={titleStyle}>把电商设计 Skill 导入商品工作流</h1>
           <p style={descStyle}>这里会把商品信息、参考图、视觉文案、图片处理和最终生图统一到同一个本地工作台里。</p>
+          <div style={benefitRowStyle}>
+            <div style={benefitChipStyle}>本地持久化</div>
+            <div style={benefitChipStyle}>可视化节点编辑</div>
+            <div style={benefitChipStyle}>电商视觉 SOP 驱动</div>
+          </div>
         </div>
         <div style={statsGridStyle}>
           <StatCard label="商品数" value={String(stats.productCount)} />
@@ -87,24 +109,38 @@ export function ProductListPage() {
         </div>
       </section>
 
-      <section style={panelStyle}>
+      <section style={{ ...panelStyle, ...createPanelStyle }}>
         <div style={toolbarStyle}>
           <div>
             <div style={panelTitleStyle}>新建商品</div>
-            <div style={panelDescStyle}>默认会创建一条包含 5 类节点的商品工作流。</div>
+            <div style={{ ...panelDescStyle, color: "rgba(255,255,255,0.72)" }}>
+              默认会创建一条包含 5 类节点的商品工作流，并立即落盘后进入详情工作台。
+            </div>
           </div>
           <div style={createRowStyle}>
             <input
               value={draftName}
               onChange={(event) => setDraftName(event.target.value)}
               placeholder="输入商品名，例如：高蛋白坚果燕麦杯"
-              style={inputStyle}
+              style={{ ...inputStyle, ...heroInputStyle }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void createProduct();
+                }
+              }}
             />
-            <button type="button" onClick={createProduct} style={primaryButtonStyle}>
-              创建并进入工作台
+            <button
+              type="button"
+              onClick={() => void createProduct()}
+              style={{ ...primaryButtonStyle, opacity: creating ? 0.72 : 1, cursor: creating ? "wait" : "pointer" }}
+              disabled={creating}
+            >
+              {creating ? "创建中..." : "创建并进入工作台"}
             </button>
           </div>
         </div>
+        <div style={statusInlineStyle}>{pageMessage}</div>
       </section>
 
       <section style={panelStyle}>
@@ -175,7 +211,7 @@ function MetaItem({ label, value }: { label: string; value: string }) {
 
 const shellStyle: CSSProperties = {
   minHeight: "100vh",
-  padding: "32px 24px 48px",
+  padding: "24px 24px 48px",
   display: "grid",
   gap: 24,
   maxWidth: 1320,
@@ -198,26 +234,49 @@ const badgeStyle: CSSProperties = {
   display: "inline-flex",
   padding: "6px 12px",
   borderRadius: 999,
-  background: "rgba(28, 25, 23, 0.08)",
-  color: "#1c1917",
+  background: "rgba(212, 175, 55, 0.14)",
+  color: "#8a6914",
   fontSize: 13,
   fontWeight: 600,
   marginBottom: 12,
+  border: "1px solid rgba(212, 175, 55, 0.28)",
 };
 
 const titleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 40,
-  lineHeight: 1.05,
+  fontSize: 44,
+  lineHeight: 1.02,
   letterSpacing: "-0.04em",
+  maxWidth: 760,
 };
 
 const descStyle: CSSProperties = {
   margin: "14px 0 0",
-  color: "#57534e",
+  color: "#44403c",
   fontSize: 16,
   lineHeight: 1.7,
   maxWidth: 720,
+};
+
+const benefitRowStyle: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 18,
+};
+
+const benefitChipStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "10px 14px",
+  borderRadius: 999,
+  background: "rgba(255,255,255,0.86)",
+  border: "1px solid rgba(231,229,228,0.95)",
+  boxShadow: "0 8px 20px rgba(41, 37, 36, 0.05)",
+  color: "#44403c",
+  fontSize: 13,
+  fontWeight: 600,
 };
 
 const statsGridStyle: CSSProperties = {
@@ -229,21 +288,29 @@ const statCardStyle: CSSProperties = {
   border: "1px solid rgba(231, 229, 228, 0.9)",
   borderRadius: 24,
   padding: 20,
-  background: "rgba(255, 255, 255, 0.9)",
-  boxShadow: "0 10px 30px rgba(41, 37, 36, 0.06)",
+  background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(252,251,249,0.92))",
+  boxShadow: "0 14px 30px rgba(41, 37, 36, 0.08)",
+  position: "relative",
+  overflow: "hidden",
 };
 
 const statLabelStyle: CSSProperties = { color: "#78716c", fontSize: 13 };
-const statValueStyle: CSSProperties = { marginTop: 8, fontSize: 22, fontWeight: 700 };
+const statValueStyle: CSSProperties = { marginTop: 8, fontSize: 22, fontWeight: 700, color: "#171717" };
 
 const panelStyle: CSSProperties = {
   border: "1px solid rgba(231, 229, 228, 0.9)",
   borderRadius: 28,
   background: "rgba(255, 255, 255, 0.94)",
   padding: 24,
-  boxShadow: "0 12px 36px rgba(41, 37, 36, 0.06)",
+  boxShadow: "0 14px 36px rgba(41, 37, 36, 0.07)",
   display: "grid",
   gap: 20,
+};
+
+const createPanelStyle: CSSProperties = {
+  background: "linear-gradient(135deg, rgba(23,23,23,0.96), rgba(43,43,43,0.94))",
+  borderColor: "rgba(64,64,64,0.55)",
+  color: "white",
 };
 
 const toolbarStyle: CSSProperties = {
@@ -274,14 +341,29 @@ const inputStyle: CSSProperties = {
   background: "white",
 };
 
+const heroInputStyle: CSSProperties = {
+  background: "rgba(255,255,255,0.98)",
+  borderColor: "rgba(212,175,55,0.28)",
+  boxShadow: "0 0 0 4px rgba(212,175,55,0.06)",
+};
+
 const primaryButtonStyle: CSSProperties = {
   border: "none",
   borderRadius: 999,
   padding: "14px 20px",
-  background: "#1c1917",
+  background: "linear-gradient(135deg, #171717, #2b2b2b)",
   color: "white",
   cursor: "pointer",
   fontWeight: 600,
+  boxShadow: "0 12px 24px rgba(23, 23, 23, 0.24)",
+};
+
+const statusInlineStyle: CSSProperties = {
+  color: "rgba(255,255,255,0.82)",
+  fontSize: 13,
+  lineHeight: 1.7,
+  borderTop: "1px solid rgba(255,255,255,0.08)",
+  paddingTop: 14,
 };
 
 const listHeaderStyle: CSSProperties = {
@@ -296,11 +378,13 @@ const ghostLinkStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  border: "1px solid #d6d3d1",
+  border: "1px solid rgba(212,175,55,0.28)",
   borderRadius: 999,
   padding: "10px 14px",
-  background: "white",
+  background: "rgba(255,250,237,0.9)",
   fontSize: 14,
+  color: "#8a6914",
+  fontWeight: 600,
 };
 
 const emptyStyle: CSSProperties = {
@@ -322,10 +406,11 @@ const productGridStyle: CSSProperties = {
 const cardStyle: CSSProperties = {
   border: "1px solid #ece7df",
   borderRadius: 24,
-  background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,247,244,0.98))",
+  background: "linear-gradient(180deg, rgba(255,255,255,0.99), rgba(250,249,246,0.96))",
   padding: 18,
   display: "grid",
   gap: 16,
+  boxShadow: "0 10px 24px rgba(41, 37, 36, 0.05)",
 };
 
 const cardTopStyle: CSSProperties = {
@@ -336,7 +421,7 @@ const cardTopStyle: CSSProperties = {
 };
 
 const cardTitleStyle: CSSProperties = { fontSize: 18, fontWeight: 700 };
-const mutedTextStyle: CSSProperties = { marginTop: 6, fontSize: 13, color: "#78716c", lineHeight: 1.6 };
+const mutedTextStyle: CSSProperties = { marginTop: 6, fontSize: 13, color: "#57534e", lineHeight: 1.6 };
 
 const dangerButtonStyle: CSSProperties = {
   border: "1px solid #fecaca",
@@ -356,7 +441,7 @@ const metaGridStyle: CSSProperties = {
 
 const metaItemStyle: CSSProperties = {
   borderRadius: 18,
-  background: "rgba(255, 255, 255, 0.75)",
+  background: "rgba(255, 255, 255, 0.82)",
   border: "1px solid rgba(231, 229, 228, 0.9)",
   padding: 12,
 };
