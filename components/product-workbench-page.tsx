@@ -43,6 +43,7 @@ import {
   type ProductImageAsset,
   type ProductRecord,
   type ResultNodePayload,
+  type VisualPlanCard,
   type WorkflowEdge,
   type WorkflowNode,
   type WorkflowNodeType,
@@ -90,15 +91,15 @@ function describeNode(node: WorkflowNode) {
     }
     case "copy": {
       const payload = node.payload as WorkflowNode<"copy">["payload"];
-      return payload.cards.length > 0 ? `${payload.cards.length} 张视觉卡片` : "待生成视觉文案";
+      return payload.cards.length > 0 ? `${payload.cards.length} 张主图卡 + ${payload.detailModules.length} 个详情模块` : "待生成视觉文案";
     }
     case "process": {
       const payload = node.payload as WorkflowNode<"process">["payload"];
-      return `${payload.aspectRatio} · ${payload.outputCount} 张候选图`;
+      return `默认 ${payload.aspectRatio} · ${payload.outputCount} 张候选图`;
     }
     case "result": {
       const payload = node.payload as WorkflowNode<"result">["payload"];
-      return payload.history.length > 0 ? `最近运行：${formatTime(payload.history[0].createdAt)}` : "尚未运行";
+      return payload.history.length > 0 ? `最近运行：${formatTime(payload.history[0].createdAt)} · ${payload.history[0].totalImages} 张` : "尚未运行";
     }
   }
 }
@@ -139,6 +140,14 @@ function parseTextLines(value: string) {
     .split(/\n/g)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function dedupeStrings(items: string[]) {
+  return Array.from(new Set(items));
+}
+
+function aspectRatioToCss(value: string) {
+  return value.replace(":", " / ");
 }
 
 function ProductField({ label, children }: { label: string; children: ReactNode }) {
@@ -401,7 +410,7 @@ export function ProductWorkbenchPage({ productId }: { productId: string }) {
       patchProduct(() => execution.product);
       setSelectedNodeId(nodeId);
       setPromptPreview(execution.prompt);
-      setStatusText(`生成完成，共返回 ${execution.run.images.length} 张候选图。`);
+      setStatusText(`生成完成：已产出 ${execution.run.outputs.length} 个版块，共 ${execution.run.totalImages} 张图片。`);
     } catch (error) {
       setStatusText(error instanceof Error ? error.message : "运行失败");
     } finally {
@@ -414,7 +423,12 @@ export function ProductWorkbenchPage({ productId }: { productId: string }) {
     try {
       const nextProduct = generateCopyForNode(product, nodeId);
       patchProduct(() => nextProduct);
-      setStatusText("已根据电商视觉文案 SOP 生成新的画面卡片。");
+      const copyNode = getNodeById(nextProduct.workflow, nodeId) as WorkflowNode<"copy"> | undefined;
+      setStatusText(
+        copyNode
+          ? `已生成 ${copyNode.payload.cards.length} 张主图卡与 ${copyNode.payload.detailModules.length} 个详情模块。`
+          : "已根据电商视觉文案 SOP 生成新的画面卡片。",
+      );
     } catch (error) {
       setStatusText(error instanceof Error ? error.message : "生成视觉文案失败");
     }
@@ -428,7 +442,9 @@ export function ProductWorkbenchPage({ productId }: { productId: string }) {
         patchProduct(() => preview.product);
       }
       setPromptPreview(preview.prompt);
-      setStatusText(`预览已更新：${preview.selectedCard.slot} · ${preview.size} · ${preview.outputCount} 张`);
+      setStatusText(
+        `预览已更新：主图 ${preview.mainCardCount} 张 + 详情模块 ${preview.detailModuleCount} 个，每个版块 ${preview.outputCount} 张候选。`,
+      );
     } catch (error) {
       setStatusText(error instanceof Error ? error.message : "预览失败");
     }
@@ -1079,6 +1095,73 @@ function CopyNodeInspector({
   onChange: (payload: CopyNodePayload) => void;
 }) {
   const payload = node.payload;
+  const updateMainCard = (cardId: string, patch: Partial<VisualPlanCard>) => {
+    onChange({
+      ...payload,
+      cards: payload.cards.map((item) => (item.id === cardId ? { ...item, ...patch } : item)),
+    });
+  };
+
+  const updateDetailModule = (cardId: string, patch: Partial<VisualPlanCard>) => {
+    onChange({
+      ...payload,
+      detailModules: payload.detailModules.map((item) => (item.id === cardId ? { ...item, ...patch } : item)),
+    });
+  };
+
+  const renderPlanEditor = (
+    card: VisualPlanCard,
+    index: number,
+    options: {
+      onPatch: (patch: Partial<VisualPlanCard>) => void;
+      titleFallback: string;
+    },
+  ) => (
+    <div key={card.id} style={cardEditorStyle}>
+      <div style={cardEditorTitleStyle}>
+        {card.slot || `${options.titleFallback} ${index + 1}`}
+        {card.optional ? <span style={optionalBadgeStyle}>可选</span> : null}
+      </div>
+      <ProductField label={card.kind === "main" ? "画面标题" : "模块标题"}>
+        <input value={card.slot} onChange={(event) => options.onPatch({ slot: event.target.value })} style={inputStyle} />
+      </ProductField>
+      <TwoColumn>
+        <ProductField label="单独输出比例">
+          <div style={{ display: "grid", gap: 6 }}>
+            <select
+              value={card.aspectRatio || ""}
+              onChange={(event) => options.onPatch({ aspectRatio: (event.target.value || undefined) as AspectRatio | undefined })}
+              style={inputStyle}
+            >
+              <option value="">继承图片处理节点默认比例</option>
+              {aspectRatioOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+            <div style={miniHintStyle}>{card.kind === "detail" ? "详情模块默认建议用 9:16，也可以改成任意可选比例。" : "留空时跟随图片处理节点的默认比例。"}</div>
+          </div>
+        </ProductField>
+        <ProductField label="价格展示">
+          <label style={checkboxLineStyle}>
+            <input type="checkbox" checked={Boolean(card.includePrice)} onChange={(event) => options.onPatch({ includePrice: event.target.checked })} />
+            <span>本版块展示价格 / 优惠信息</span>
+          </label>
+        </ProductField>
+      </TwoColumn>
+      <ProductField label="画面内容">
+        <textarea value={card.scene} onChange={(event) => options.onPatch({ scene: event.target.value })} style={textareaStyle} />
+      </ProductField>
+      <ProductField label="图内文案">
+        <textarea value={card.overlay} onChange={(event) => options.onPatch({ overlay: event.target.value })} style={textareaStyle} />
+      </ProductField>
+      <ProductField label="设计说明">
+        <textarea value={card.designNotes} onChange={(event) => options.onPatch({ designNotes: event.target.value })} style={textareaStyle} />
+      </ProductField>
+    </div>
+  );
+
   return (
     <div style={inspectorGroupStyle}>
       <div style={actionBarStyle}>
@@ -1216,61 +1299,41 @@ function CopyNodeInspector({
 
       <div style={subSectionStyle}>
         <div style={subTitleStyle}>5 张视觉执行卡</div>
-        {payload.cards.map((card, index) => (
-          <div key={card.id} style={cardEditorStyle}>
-            <div style={cardEditorTitleStyle}>{card.slot || `图${index + 1}`}</div>
-            <ProductField label="画面标题">
-              <input
-                value={card.slot}
-                onChange={(event) =>
-                  onChange({
-                    ...payload,
-                    cards: payload.cards.map((item) => (item.id === card.id ? { ...item, slot: event.target.value } : item)),
-                  })
-                }
-                style={inputStyle}
-              />
-            </ProductField>
-            <ProductField label="画面内容">
-              <textarea
-                value={card.scene}
-                onChange={(event) =>
-                  onChange({
-                    ...payload,
-                    cards: payload.cards.map((item) => (item.id === card.id ? { ...item, scene: event.target.value } : item)),
-                  })
-                }
-                style={textareaStyle}
-              />
-            </ProductField>
-            <ProductField label="图内文案">
-              <textarea
-                value={card.overlay}
-                onChange={(event) =>
-                  onChange({
-                    ...payload,
-                    cards: payload.cards.map((item) => (item.id === card.id ? { ...item, overlay: event.target.value } : item)),
-                  })
-                }
-                style={textareaStyle}
-              />
-            </ProductField>
-            <ProductField label="设计说明">
-              <textarea
-                value={card.designNotes}
-                onChange={(event) =>
-                  onChange({
-                    ...payload,
-                    cards: payload.cards.map((item) =>
-                      item.id === card.id ? { ...item, designNotes: event.target.value } : item,
-                    ),
-                  })
-                }
-                style={textareaStyle}
-              />
-            </ProductField>
+        <div style={miniHintStyle}>每张主图都可以单独改比例，也可以决定是否展示价格，避免 5 张图长得太像。</div>
+        {payload.cards.map((card, index) =>
+          renderPlanEditor(card, index, {
+            onPatch: (patch) => updateMainCard(card.id, patch),
+            titleFallback: "图",
+          }),
+        )}
+      </div>
+
+      <div style={subSectionStyle}>
+        <div style={{ ...actionBarStyle, alignItems: "center" }}>
+          <div style={{ display: "grid", gap: 4 }}>
+            <div style={subTitleStyle}>详情页模块（按需取舍）</div>
+            <div style={miniHintStyle}>详情模块已支持单独尺寸，比如统一改成 9:16。</div>
           </div>
-        ))}
+          <button
+            type="button"
+            style={ghostButtonStyle}
+            onClick={() =>
+              onChange({
+                ...payload,
+                detailModules: payload.detailModules.map((item) => ({ ...item, aspectRatio: "9:16" })),
+              })
+            }
+          >
+            详情模块全部改为 9:16
+          </button>
+        </div>
+        {payload.detailModules.map((card, index) =>
+          renderPlanEditor(card, index, {
+            onPatch: (patch) => updateDetailModule(card.id, patch),
+            titleFallback: "模块",
+          }),
+        )}
+        {payload.detailModules.length === 0 ? <div style={miniHintStyle}>生成 SOP 后，这里会出现可选详情模块。</div> : null}
       </div>
 
       <ProductField label="风险提醒（每行一条）">
@@ -1291,7 +1354,7 @@ function ProcessNodeInspector({
   return (
     <div style={inspectorGroupStyle}>
       <TwoColumn>
-        <ProductField label="输出比例">
+        <ProductField label="默认输出比例">
           <select
             value={payload.aspectRatio}
             onChange={(event) => onChange({ ...payload, aspectRatio: event.target.value as AspectRatio })}
@@ -1304,7 +1367,7 @@ function ProcessNodeInspector({
             ))}
           </select>
         </ProductField>
-        <ProductField label="候选图数量">
+        <ProductField label="每个版块候选数">
           <input
             type="number"
             min={1}
@@ -1394,32 +1457,28 @@ function ResultNodeInspector({
 }) {
   const payload = node.payload;
   const latestRun = getLatestRun(node);
-  const cardOptions = copyNodes.flatMap((copyNode) => copyNode.payload.cards);
+  const mainCards = copyNodes.flatMap((copyNode) => copyNode.payload.cards);
+  const detailModules = copyNodes.flatMap((copyNode) => copyNode.payload.detailModules);
+  const selectedDetailIds = new Set(payload.selectedDetailModuleIds);
 
   return (
     <div style={inspectorGroupStyle}>
       <div style={actionBarStyle}>
         <button type="button" style={primaryButtonStyle} onClick={onRun} disabled={running}>
-          {running ? "运行中..." : "生成候选图"}
+          {running ? "运行中..." : "运行整套主图 / 详情模块"}
         </button>
         <button type="button" style={ghostButtonStyle} onClick={onPreviewPrompt}>
           预览最终 Prompt
         </button>
       </div>
       <TwoColumn>
-        <ProductField label="使用哪张视觉卡">
-          <select
-            value={payload.preferredCardId || ""}
-            onChange={(event) => onChange({ ...payload, preferredCardId: event.target.value || undefined })}
-            style={inputStyle}
-          >
-            <option value="">自动选择第一张</option>
-            {cardOptions.map((card) => (
-              <option key={card.id} value={card.id}>
-                {card.slot}
-              </option>
-            ))}
-          </select>
+        <ProductField label="本次固定生成">
+          <div style={resultInfoCardStyle}>
+            <div style={resultInfoTitleStyle}>主图 5 张全套</div>
+            <div style={miniHintStyle}>图1 点击率核心、图2 痛点共鸣、图3 差异化、图4 场景适配、图5 CTA 会一起生成。</div>
+            <div style={miniHintStyle}>当前主图卡数量：{mainCards.length}</div>
+            <div style={miniHintStyle}>每个版块可在“视觉文案”节点单独设置比例和是否展示价格。</div>
+          </div>
         </ProductField>
         <ProductField label="默认回填到">
           <select
@@ -1436,6 +1495,36 @@ function ResultNodeInspector({
           </select>
         </ProductField>
       </TwoColumn>
+      <ProductField label="附加详情页模块">
+        <div style={selectionGridStyle}>
+          {detailModules.map((module) => {
+            const checked = selectedDetailIds.has(module.id);
+            return (
+              <label key={module.id} style={{ ...selectionCardStyle, borderColor: checked ? "#8a6914" : "#e7e5e4", background: checked ? "#fffaf0" : "white" }}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) => {
+                    const nextIds = event.target.checked
+                      ? [...payload.selectedDetailModuleIds, module.id]
+                      : payload.selectedDetailModuleIds.filter((id) => id !== module.id);
+                    onChange({ ...payload, selectedDetailModuleIds: dedupeStrings(nextIds) });
+                  }}
+                />
+                <div style={{ display: "grid", gap: 4 }}>
+                  <div style={{ fontWeight: 700, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <span>{module.slot}</span>
+                    {module.optional ? <span style={optionalBadgeStyle}>可选</span> : null}
+                    {module.aspectRatio ? <span style={optionalBadgeStyle}>{module.aspectRatio}</span> : null}
+                  </div>
+                  <div style={miniHintStyle}>{module.designNotes}</div>
+                </div>
+              </label>
+            );
+          })}
+          {detailModules.length === 0 ? <div style={miniHintStyle}>请先在视觉文案节点生成 SOP，这里会出现可选详情模块。</div> : null}
+        </div>
+      </ProductField>
       <ProductField label="Prompt 预览">
         <textarea
           value={
@@ -1454,38 +1543,53 @@ function ResultNodeInspector({
           <div key={run.id} style={runCardStyle}>
             <div style={runHeaderStyle}>
               <div>
-                <div style={{ fontWeight: 700 }}>{run.cardTitle}</div>
+                <div style={{ fontWeight: 700 }}>主图 + 详情模块批量运行</div>
                 <div style={miniHintStyle}>
-                  {formatTime(run.createdAt)} · {run.mode === "edit" ? "图生图" : "文生图"} · {run.size}
+                  {formatTime(run.createdAt)} · {run.mode === "edit" ? "图生图" : "文生图"} · {run.size} · 共 {run.totalImages} 张
                 </div>
               </div>
               {run.error ? <div style={errorBadgeStyle}>{run.error}</div> : <div style={successBadgeStyle}>成功</div>}
             </div>
             <div style={miniHintStyle}>{run.processSummary}</div>
-            <div style={resultGridStyle}>
-              {run.images.map((image) => (
-                <div key={image.id} style={resultItemStyle}>
-                  {image.status === "success" && image.dataUrl ? (
-                    <>
-                      <button type="button" style={resultThumbButtonStyle} onClick={() => onPreviewImage(image.dataUrl!, image.name)}>
-                        <img src={image.dataUrl} alt={image.name} style={resultThumbStyle} />
-                      </button>
-                      <div style={resultActionStyle}>
-                        <button type="button" style={smallButtonStyle} onClick={() => downloadDataUrl(image.dataUrl!, image.name)}>
-                          下载
-                        </button>
-                        <button
-                          type="button"
-                          style={smallPrimaryStyle}
-                          onClick={() => onFillReference(run.id, image.id, payload.autoReferenceNodeId)}
-                        >
-                          设为参考图
-                        </button>
+            <div style={moduleRunListStyle}>
+              {run.outputs.map((group) => (
+                <div key={group.id} style={moduleRunCardStyle}>
+                  <div style={moduleRunHeaderStyle}>
+                    <div>
+                      <div style={{ fontWeight: 700 }}>{group.title}</div>
+                      <div style={miniHintStyle}>
+                        {group.kind === "main" ? "主图版块" : "详情模块"} · {group.size || run.size} · {group.images.length} 张
                       </div>
-                    </>
-                  ) : (
-                    <div style={resultFallbackStyle}>{image.error || "生成失败"}</div>
-                  )}
+                    </div>
+                    {group.error ? <div style={errorBadgeStyle}>{group.error}</div> : null}
+                  </div>
+                  <div style={resultGridStyle}>
+                    {group.images.map((image) => (
+                      <div key={image.id} style={resultItemStyle}>
+                        {image.status === "success" && image.dataUrl ? (
+                          <>
+                            <button type="button" style={resultThumbButtonStyle} onClick={() => onPreviewImage(image.dataUrl!, image.name)}>
+                              <img src={image.dataUrl} alt={image.name} style={{ ...resultThumbStyle, aspectRatio: aspectRatioToCss(group.size || run.size) }} />
+                            </button>
+                            <div style={resultActionStyle}>
+                              <button type="button" style={smallButtonStyle} onClick={() => downloadDataUrl(image.dataUrl!, image.name)}>
+                                下载
+                              </button>
+                              <button
+                                type="button"
+                                style={smallPrimaryStyle}
+                                onClick={() => onFillReference(run.id, image.id, payload.autoReferenceNodeId)}
+                              >
+                                设为参考图
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <div style={resultFallbackStyle}>{image.error || "生成失败"}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1771,6 +1875,7 @@ const inspectorBodyStyle: CSSProperties = { display: "grid", gap: 16 };
 const inspectorGroupStyle: CSSProperties = { display: "grid", gap: 14 };
 const fieldStyle: CSSProperties = { display: "grid", gap: 8 };
 const fieldLabelStyle: CSSProperties = { fontSize: 13, color: "#57534e", fontWeight: 600 };
+const checkboxLineStyle: CSSProperties = { display: "flex", gap: 10, alignItems: "center", minHeight: 48, color: "#292524" };
 
 const inputStyle: CSSProperties = {
   width: "100%",
@@ -1851,6 +1956,16 @@ const cardEditorStyle: CSSProperties = {
   gap: 10,
 };
 const cardEditorTitleStyle: CSSProperties = { fontWeight: 700 };
+const optionalBadgeStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  borderRadius: 999,
+  padding: "3px 8px",
+  background: "#fff7ed",
+  color: "#c2410c",
+  fontSize: 11,
+  fontWeight: 700,
+};
 const imageItemStyle: CSSProperties = {
   border: "1px solid #ece7df",
   borderRadius: 18,
@@ -1888,6 +2003,31 @@ const runCardStyle: CSSProperties = {
   display: "grid",
   gap: 12,
 };
+const resultInfoCardStyle: CSSProperties = {
+  border: "1px solid #ece7df",
+  borderRadius: 16,
+  padding: 14,
+  background: "#fcfbf9",
+  display: "grid",
+  gap: 6,
+};
+const resultInfoTitleStyle: CSSProperties = {
+  fontWeight: 700,
+  fontSize: 14,
+};
+const selectionGridStyle: CSSProperties = {
+  display: "grid",
+  gap: 10,
+};
+const selectionCardStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "auto minmax(0, 1fr)",
+  gap: 10,
+  alignItems: "start",
+  padding: 12,
+  borderRadius: 16,
+  border: "1px solid #e7e5e4",
+};
 const runHeaderStyle: CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
@@ -1914,6 +2054,24 @@ const resultGridStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
   gap: 10,
+};
+const moduleRunListStyle: CSSProperties = {
+  display: "grid",
+  gap: 14,
+};
+const moduleRunCardStyle: CSSProperties = {
+  borderRadius: 16,
+  border: "1px solid #ece7df",
+  padding: 12,
+  background: "rgba(255,255,255,0.7)",
+  display: "grid",
+  gap: 10,
+};
+const moduleRunHeaderStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "flex-start",
 };
 const resultItemStyle: CSSProperties = {
   borderRadius: 16,

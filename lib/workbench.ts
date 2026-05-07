@@ -52,10 +52,27 @@ export type VisualSellingReason = {
 
 export type VisualPlanCard = {
   id: string;
+  code: string;
+  kind: "main" | "detail";
   slot: string;
   scene: string;
   overlay: string;
   designNotes: string;
+  aspectRatio?: AspectRatio;
+  includePrice?: boolean;
+  optional?: boolean;
+};
+
+export type WorkflowRunOutputGroup = {
+  id: string;
+  planId: string;
+  code: string;
+  kind: "main" | "detail";
+  title: string;
+  prompt: string;
+  size?: AspectRatio;
+  images: GeneratedImageAsset[];
+  error?: string;
 };
 
 export type GeneratedImageAsset = {
@@ -76,10 +93,10 @@ export type WorkflowRunRecord = {
   count: number;
   size: AspectRatio;
   prompt: string;
-  cardTitle: string;
   processSummary: string;
   sourceNodeIds: string[];
-  images: GeneratedImageAsset[];
+  outputs: WorkflowRunOutputGroup[];
+  totalImages: number;
   error?: string;
 };
 
@@ -111,6 +128,7 @@ export type CopyNodePayload = {
   complianceLevel: ComplianceLevel;
   reasons: VisualSellingReason[];
   cards: VisualPlanCard[];
+  detailModules: VisualPlanCard[];
   summary: string;
   riskNotes: string[];
   lastGeneratedAt?: string;
@@ -130,6 +148,7 @@ export type ProcessNodePayload = {
 
 export type ResultNodePayload = {
   preferredCardId?: string;
+  selectedDetailModuleIds: string[];
   autoReferenceNodeId?: string;
   history: WorkflowRunRecord[];
 };
@@ -215,6 +234,7 @@ function defaultCopyPayload(): CopyNodePayload {
     complianceLevel: "通用",
     reasons: [],
     cards: [],
+    detailModules: [],
     summary: "",
     riskNotes: [],
     lastGeneratedAt: undefined,
@@ -224,7 +244,7 @@ function defaultCopyPayload(): CopyNodePayload {
 function defaultProcessPayload(): ProcessNodePayload {
   return {
     aspectRatio: "1:1",
-    outputCount: 3,
+    outputCount: 1,
     background: "white",
     fit: "contain",
     cropFocus: "商品主体完整露出，避免裁掉品牌识别点。",
@@ -238,6 +258,7 @@ function defaultProcessPayload(): ProcessNodePayload {
 function defaultResultPayload(referenceNodeId?: string): ResultNodePayload {
   return {
     preferredCardId: undefined,
+    selectedDetailModuleIds: [],
     autoReferenceNodeId: referenceNodeId,
     history: [],
   };
@@ -473,10 +494,15 @@ function sanitizeCopyReasons(reasons: Partial<VisualSellingReason>[] | undefined
 function sanitizeCopyCards(cards: Partial<VisualPlanCard>[] | undefined) {
   return (cards || []).map((card) => ({
     id: card.id || makeId(),
+    code: card.code || "custom",
+    kind: card.kind === "detail" ? "detail" : "main",
     slot: card.slot || "图1",
     scene: card.scene || "",
     overlay: card.overlay || "",
     designNotes: card.designNotes || "",
+    aspectRatio: card.aspectRatio ? coerceAspectRatio(card.aspectRatio) : undefined,
+    includePrice: typeof card.includePrice === "boolean" ? card.includePrice : undefined,
+    optional: Boolean(card.optional),
   } satisfies VisualPlanCard));
 }
 
@@ -493,20 +519,59 @@ function sanitizeGeneratedImages(images: Partial<GeneratedImageAsset>[] | undefi
   } satisfies GeneratedImageAsset));
 }
 
+function sanitizeRunOutputGroups(groups: Partial<WorkflowRunOutputGroup>[] | undefined, legacyRun?: Partial<WorkflowRunRecord>) {
+  if (groups && groups.length > 0) {
+    return groups.map((group) => ({
+      id: group.id || makeId(),
+      planId: group.planId || group.id || makeId(),
+      code: group.code || "custom",
+      kind: group.kind === "detail" ? "detail" : "main",
+      title: group.title || "未命名版块",
+      prompt: group.prompt || "",
+      size: group.size ? coerceAspectRatio(group.size) : legacyRun?.size ? coerceAspectRatio(legacyRun.size) : undefined,
+      images: sanitizeGeneratedImages(group.images),
+      error: group.error,
+    } satisfies WorkflowRunOutputGroup));
+  }
+
+  const legacyCompat = legacyRun as (Partial<WorkflowRunRecord> & { images?: Partial<GeneratedImageAsset>[]; cardTitle?: string }) | undefined;
+  const legacyImages = legacyCompat?.images;
+  if (!legacyImages || legacyImages.length === 0) {
+    return [] as WorkflowRunOutputGroup[];
+  }
+
+  return [
+    {
+      id: makeId(),
+      planId: makeId(),
+      code: "legacy-main",
+      kind: "main",
+      title: legacyCompat?.cardTitle || "未命名画面卡",
+      prompt: legacyCompat?.prompt || "",
+      size: legacyCompat?.size ? coerceAspectRatio(legacyCompat.size) : undefined,
+      images: sanitizeGeneratedImages(legacyImages),
+      error: legacyCompat?.error,
+    } satisfies WorkflowRunOutputGroup,
+  ];
+}
+
 function sanitizeRunHistory(history: Partial<WorkflowRunRecord>[] | undefined) {
-  return (history || []).map((run) => ({
-    id: run.id || makeId(),
-    createdAt: run.createdAt || new Date().toISOString(),
-    mode: run.mode === "generate" ? "generate" : "edit",
-    count: Math.max(1, Math.min(4, Number(run.count) || 1)),
-    size: coerceAspectRatio(run.size),
-    prompt: run.prompt || "",
-    cardTitle: run.cardTitle || "未命名画面卡",
-    processSummary: run.processSummary || "",
-    sourceNodeIds: Array.isArray(run.sourceNodeIds) ? run.sourceNodeIds.filter(Boolean) : [],
-    images: sanitizeGeneratedImages(run.images),
-    error: run.error,
-  } satisfies WorkflowRunRecord));
+  return (history || []).map((run) => {
+    const outputs = sanitizeRunOutputGroups(run.outputs, run);
+    return {
+      id: run.id || makeId(),
+      createdAt: run.createdAt || new Date().toISOString(),
+      mode: run.mode === "generate" ? "generate" : "edit",
+      count: Math.max(1, Math.min(4, Number(run.count) || 1)),
+      size: coerceAspectRatio(run.size),
+      prompt: run.prompt || "",
+      processSummary: run.processSummary || "",
+      sourceNodeIds: Array.isArray(run.sourceNodeIds) ? run.sourceNodeIds.filter(Boolean) : [],
+      outputs,
+      totalImages: typeof run.totalImages === "number" ? run.totalImages : outputs.reduce((total, group) => total + group.images.length, 0),
+      error: run.error,
+    } satisfies WorkflowRunRecord;
+  });
 }
 
 function sanitizeNode(node: Partial<WorkflowNode>, fallbackName: string): WorkflowNode {
@@ -553,6 +618,7 @@ function sanitizeNode(node: Partial<WorkflowNode>, fallbackName: string): Workfl
           complianceLevel: coerceCompliance((node.payload as Partial<CopyNodePayload> | undefined)?.complianceLevel),
           reasons: sanitizeCopyReasons((node.payload as Partial<CopyNodePayload> | undefined)?.reasons),
           cards: sanitizeCopyCards((node.payload as Partial<CopyNodePayload> | undefined)?.cards),
+          detailModules: sanitizeCopyCards((node.payload as Partial<CopyNodePayload> | undefined)?.detailModules),
           summary: (node.payload as Partial<CopyNodePayload> | undefined)?.summary || "",
           riskNotes: Array.isArray((node.payload as Partial<CopyNodePayload> | undefined)?.riskNotes)
             ? ((node.payload as Partial<CopyNodePayload> | undefined)?.riskNotes || []).filter(Boolean)
@@ -584,6 +650,9 @@ function sanitizeNode(node: Partial<WorkflowNode>, fallbackName: string): Workfl
         ...base,
         payload: {
           preferredCardId: (node.payload as Partial<ResultNodePayload> | undefined)?.preferredCardId,
+          selectedDetailModuleIds: Array.isArray((node.payload as Partial<ResultNodePayload> | undefined)?.selectedDetailModuleIds)
+            ? ((node.payload as Partial<ResultNodePayload> | undefined)?.selectedDetailModuleIds || []).filter(Boolean)
+            : [],
           autoReferenceNodeId: (node.payload as Partial<ResultNodePayload> | undefined)?.autoReferenceNodeId,
           history: sanitizeRunHistory((node.payload as Partial<ResultNodePayload> | undefined)?.history),
         },
@@ -647,19 +716,24 @@ async function persistResultNode(node: WorkflowNode<"result">) {
   const history = await Promise.all(
     node.payload.history.map(async (run) => ({
       ...run,
-      images: await Promise.all(
-        run.images.map(async (image) => {
-          if (!image.dataUrl && !image.assetId) return image;
-          const assetId = image.assetId || `result:${run.id}:${image.id}`;
-          if (image.dataUrl) {
-            await writeAsset(assetId, image.dataUrl);
-          }
-          return {
-            ...image,
-            assetId,
-            dataUrl: undefined,
-          } satisfies GeneratedImageAsset;
-        }),
+      outputs: await Promise.all(
+        run.outputs.map(async (group) => ({
+          ...group,
+          images: await Promise.all(
+            group.images.map(async (image) => {
+              if (!image.dataUrl && !image.assetId) return image;
+              const assetId = image.assetId || `result:${run.id}:${group.id}:${image.id}`;
+              if (image.dataUrl) {
+                await writeAsset(assetId, image.dataUrl);
+              }
+              return {
+                ...image,
+                assetId,
+                dataUrl: undefined,
+              } satisfies GeneratedImageAsset;
+            }),
+          ),
+        })),
       ),
     })),
   );
@@ -704,10 +778,15 @@ async function hydrateResultNode(node: WorkflowNode<"result">) {
   const history = await Promise.all(
     node.payload.history.map(async (run) => ({
       ...run,
-      images: await Promise.all(
-        run.images.map(async (image) => ({
-          ...image,
-          dataUrl: image.dataUrl ?? (image.assetId ? await readAsset(image.assetId) : undefined),
+      outputs: await Promise.all(
+        run.outputs.map(async (group) => ({
+          ...group,
+          images: await Promise.all(
+            group.images.map(async (image) => ({
+              ...image,
+              dataUrl: image.dataUrl ?? (image.assetId ? await readAsset(image.assetId) : undefined),
+            })),
+          ),
         })),
       ),
     })),
@@ -744,8 +823,10 @@ function collectAssetIds(products: ProductRecord[]) {
       }
       if (node.type === "result") {
         for (const run of (node as WorkflowNode<"result">).payload.history) {
-          for (const image of run.images) {
-            if (image.assetId) ids.add(image.assetId);
+          for (const group of run.outputs) {
+            for (const image of group.images) {
+              if (image.assetId) ids.add(image.assetId);
+            }
           }
         }
       }
@@ -797,7 +878,8 @@ export function countGeneratedImages(product: ProductRecord) {
   return product.workflow.nodes
     .filter((node) => node.type === "result")
     .flatMap((node) => (node as WorkflowNode<"result">).payload.history)
-    .flatMap((run) => run.images)
+    .flatMap((run) => run.outputs)
+    .flatMap((group) => group.images)
     .filter((image) => image.status === "success").length;
 }
 
