@@ -1,3 +1,8 @@
+export type AssetRecord = {
+  id: string;
+  value: string;
+};
+
 export type StoredReferenceImage = {
   name: string;
   type: string;
@@ -35,24 +40,25 @@ export type ImageConversation = {
   turns: ImageTurn[];
 };
 
-type AssetRecord = {
-  id: string;
-  value: string;
-};
-
-const STORAGE_KEY = "gpt-img:conversations";
+const CHAT_STORAGE_KEY = "gpt-img:conversations";
 const ACTIVE_KEY = "gpt-img:active-id";
 const SIZE_KEY = "gpt-img:last-size";
 const ASSET_DB_NAME = "gpt-img-assets";
 const ASSET_STORE_NAME = "assets";
 const MAX_CONVERSATIONS = 20;
+const CHAT_ASSET_PREFIXES = ["chat:ref:", "chat:result:"];
+const PRODUCT_ASSET_PREFIXES = ["reference:", "result:"];
 
-export const storageKeys = { STORAGE_KEY, ACTIVE_KEY, SIZE_KEY };
+export const storageKeys = {
+  STORAGE_KEY: CHAT_STORAGE_KEY,
+  ACTIVE_KEY,
+  SIZE_KEY,
+};
 
-function openAssetDb(): Promise<IDBDatabase | null> {
-  if (typeof window === "undefined" || typeof indexedDB === "undefined") return Promise.resolve(null);
+async function openAssetDb() {
+  if (typeof window === "undefined" || typeof indexedDB === "undefined") return null;
 
-  return new Promise((resolve) => {
+  return new Promise<IDBDatabase | null>((resolve) => {
     const request = indexedDB.open(ASSET_DB_NAME, 1);
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -62,10 +68,11 @@ function openAssetDb(): Promise<IDBDatabase | null> {
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => resolve(null);
+    request.onblocked = () => resolve(null);
   });
 }
 
-async function putAsset(id: string, value: string) {
+export async function writeAsset(id: string, value: string) {
   const db = await openAssetDb();
   if (!db) return;
 
@@ -78,7 +85,7 @@ async function putAsset(id: string, value: string) {
   });
 }
 
-async function getAsset(id: string) {
+export async function readAsset(id: string) {
   const db = await openAssetDb();
   if (!db) return undefined;
 
@@ -90,32 +97,8 @@ async function getAsset(id: string) {
   });
 }
 
-async function listAssetIds() {
-  const db = await openAssetDb();
-  if (!db) return [] as string[];
-
-  return new Promise<string[]>((resolve) => {
-    const transaction = db.transaction(ASSET_STORE_NAME, "readonly");
-    const store = transaction.objectStore(ASSET_STORE_NAME);
-    const request = store.openCursor();
-    const ids: string[] = [];
-
-    request.onsuccess = () => {
-      const cursor = request.result;
-      if (!cursor) {
-        resolve(ids);
-        return;
-      }
-      ids.push(String(cursor.key));
-      cursor.continue();
-    };
-    request.onerror = () => resolve(ids);
-  });
-}
-
-async function deleteAssets(ids: string[]) {
+export async function deleteAssets(ids: string[]) {
   if (ids.length === 0) return;
-
   const db = await openAssetDb();
   if (!db) return;
 
@@ -129,11 +112,37 @@ async function deleteAssets(ids: string[]) {
   });
 }
 
+async function listAssetIds() {
+  const db = await openAssetDb();
+  if (!db) return [] as string[];
+
+  return new Promise<string[]>((resolve) => {
+    const transaction = db.transaction(ASSET_STORE_NAME, "readonly");
+    const store = transaction.objectStore(ASSET_STORE_NAME);
+    const keysRequest = store.getAllKeys();
+    keysRequest.onsuccess = () => resolve((keysRequest.result as string[]) || []);
+    keysRequest.onerror = () => resolve([]);
+  });
+}
+
+export async function pruneAssets(activeIds: Iterable<string>, options?: { prefixes?: string[] }) {
+  const activeSet = new Set(activeIds);
+  const existingIds = await listAssetIds();
+  const prefixes = options?.prefixes || [];
+  const staleIds = existingIds.filter((id) => {
+    if (prefixes.length > 0 && !prefixes.some((prefix) => id.startsWith(prefix))) {
+      return false;
+    }
+    return !activeSet.has(id);
+  });
+  await deleteAssets(staleIds);
+}
+
 function limitConversations(items: ImageConversation[]) {
   return sortConversations(items).slice(0, MAX_CONVERSATIONS);
 }
 
-function collectReferencedAssetIds(items: ImageConversation[]) {
+function collectConversationAssetIds(items: ImageConversation[]) {
   const ids = new Set<string>();
 
   for (const conversation of items) {
@@ -150,13 +159,6 @@ function collectReferencedAssetIds(items: ImageConversation[]) {
   return ids;
 }
 
-async function pruneUnreferencedAssets(items: ImageConversation[]) {
-  const referencedIds = collectReferencedAssetIds(items);
-  const storedIds = await listAssetIds();
-  const staleIds = storedIds.filter((id) => !referencedIds.has(id));
-  await deleteAssets(staleIds);
-}
-
 async function persistConversationAssets(items: ImageConversation[]) {
   return Promise.all(
     items.map(async (conversation) => ({
@@ -166,9 +168,9 @@ async function persistConversationAssets(items: ImageConversation[]) {
           ...turn,
           referenceImages: await Promise.all(
             turn.referenceImages.map(async (image, index) => {
-              const assetId = image.assetId || `ref:${turn.id}:${index}:${image.name}`;
+              const assetId = image.assetId || `chat:ref:${turn.id}:${index}:${image.name}`;
               if (image.dataUrl) {
-                await putAsset(assetId, image.dataUrl);
+                await writeAsset(assetId, image.dataUrl);
               }
               return {
                 name: image.name,
@@ -182,8 +184,8 @@ async function persistConversationAssets(items: ImageConversation[]) {
               if (image.status !== "success" || !image.b64_json) {
                 return image;
               }
-              const assetId = image.assetId || `result:${turn.id}:${index}:${image.id}`;
-              await putAsset(assetId, image.b64_json);
+              const assetId = image.assetId || `chat:result:${turn.id}:${index}:${image.id}`;
+              await writeAsset(assetId, image.b64_json);
               return {
                 id: image.id,
                 status: image.status,
@@ -207,13 +209,13 @@ async function hydrateConversationAssets(items: ImageConversation[]) {
           referenceImages: await Promise.all(
             turn.referenceImages.map(async (image) => ({
               ...image,
-              dataUrl: image.dataUrl ?? (image.assetId ? await getAsset(image.assetId) : undefined),
+              dataUrl: image.dataUrl ?? (image.assetId ? await readAsset(image.assetId) : undefined),
             })),
           ),
           images: await Promise.all(
             turn.images.map(async (image) => ({
               ...image,
-              b64_json: image.b64_json ?? (image.assetId ? await getAsset(image.assetId) : undefined),
+              b64_json: image.b64_json ?? (image.assetId ? await readAsset(image.assetId) : undefined),
             })),
           ),
         })),
@@ -225,10 +227,9 @@ async function hydrateConversationAssets(items: ImageConversation[]) {
 export async function readConversations(): Promise<ImageConversation[]> {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(CHAT_STORAGE_KEY);
     const items = raw ? (JSON.parse(raw) as ImageConversation[]) : [];
-    const limitedItems = limitConversations(items);
-    return hydrateConversationAssets(limitedItems);
+    return hydrateConversationAssets(limitConversations(items));
   } catch {
     return [];
   }
@@ -237,8 +238,8 @@ export async function readConversations(): Promise<ImageConversation[]> {
 export async function writeConversations(items: ImageConversation[]) {
   if (typeof window === "undefined") return;
   const serializableItems = await persistConversationAssets(limitConversations(items));
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableItems));
-  await pruneUnreferencedAssets(serializableItems);
+  window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(serializableItems));
+  await pruneAssets(collectConversationAssetIds(serializableItems), { prefixes: CHAT_ASSET_PREFIXES });
 }
 
 export function makeId() {
@@ -250,7 +251,7 @@ export function readAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("读取图片失败"));
+    reader.onerror = () => reject(new Error("??????"));
     reader.readAsDataURL(file);
   });
 }
@@ -267,3 +268,17 @@ export function dataUrlToFile(dataUrl: string, fileName: string, mimeType?: stri
 export function sortConversations(items: ImageConversation[]) {
   return [...items].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
+
+export function downloadDataUrl(dataUrl: string, fileName: string) {
+  if (typeof window === "undefined") return;
+  const anchor = window.document.createElement("a");
+  anchor.href = dataUrl;
+  anchor.download = fileName;
+  anchor.rel = "noopener";
+  anchor.click();
+}
+
+export const assetScopes = {
+  chatPrefixes: CHAT_ASSET_PREFIXES,
+  productPrefixes: PRODUCT_ASSET_PREFIXES,
+};
