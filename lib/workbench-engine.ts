@@ -31,6 +31,18 @@ type OutputPlan = {
   prompt: string;
 };
 
+type ExecutionProgress = {
+  product: ProductRecord;
+  run: WorkflowRunRecord;
+  completedImages: number;
+  totalImages: number;
+  message: string;
+};
+
+type ExecuteRunOptions = {
+  onProgress?: (payload: ExecutionProgress) => void;
+};
+
 function splitLines(value: string) {
   return value
     .split(/[\n,，;；|]/g)
@@ -569,24 +581,144 @@ export function buildPromptPreview(product: ProductRecord, resultNodeId: string)
   };
 }
 
-export async function executeResultNode(product: ProductRecord, resultNodeId: string) {
-  const prepared = buildExecutionPlans(product, resultNodeId);
+function buildRunPrompt(outputs: WorkflowRunOutputGroup[]) {
+  return outputs.map((group, index) => `### ${index + 1}. ${group.title}（${group.size || "1:1"}）\n${group.prompt}`).join("\n\n---\n\n");
+}
 
+function summarizeFailedImages(outputs: WorkflowRunOutputGroup[]) {
+  return outputs.flatMap((group) => group.images).filter((image) => image.status === "error").length;
+}
+
+function countCompletedImages(outputs: WorkflowRunOutputGroup[]) {
+  return outputs.flatMap((group) => group.images).filter((image) => image.status !== "loading").length;
+}
+
+function finalizeOutputGroup(group: WorkflowRunOutputGroup): WorkflowRunOutputGroup {
+  const loadingCount = group.images.filter((image) => image.status === "loading").length;
+  const failedCount = group.images.filter((image) => image.status === "error").length;
+  if (loadingCount > 0) {
+    return {
+      ...group,
+      error: undefined,
+    };
+  }
+  if (failedCount === 0) {
+    return {
+      ...group,
+      error: undefined,
+    };
+  }
+  if (failedCount === group.images.length) {
+    return {
+      ...group,
+      error: "该版块全部生成失败",
+    };
+  }
+  return {
+    ...group,
+    error: `该版块有 ${failedCount} 张生成失败`,
+  };
+}
+
+function finalizeRunRecord(run: WorkflowRunRecord): WorkflowRunRecord {
+  const outputs = run.outputs.map((group) => finalizeOutputGroup(group));
+  const failedCount = summarizeFailedImages(outputs);
+  const pendingCount = outputs.flatMap((group) => group.images).filter((image) => image.status === "loading").length;
+  return {
+    ...run,
+    outputs,
+    prompt: buildRunPrompt(outputs),
+    totalImages: outputs.reduce((total, group) => total + group.images.length, 0),
+    error: pendingCount > 0 ? undefined : failedCount > 0 ? `其中 ${failedCount} 张生成失败` : undefined,
+  };
+}
+
+function upsertRunRecord(
+  product: ProductRecord,
+  resultNodeId: string,
+  run: WorkflowRunRecord,
+  mode: "prepend" | "replace",
+) {
+  return updateNode(product, resultNodeId, (node) => {
+    const resultNode = node as WorkflowNode<"result">;
+    const exists = resultNode.payload.history.some((item) => item.id === run.id);
+    const replacedHistory = exists
+      ? resultNode.payload.history.map((item) => (item.id === run.id ? run : item))
+      : resultNode.payload.history;
+
+    return {
+      ...resultNode,
+      payload: {
+        ...resultNode.payload,
+        history:
+          mode === "prepend" && !exists ? [run, ...replacedHistory].slice(0, 12) : replacedHistory,
+      },
+    };
+  });
+}
+
+function makeLoadingImage(runId: string, groupCode: string, groupTitle: string, index: number, createdAt: string): GeneratedImageAsset {
+  return {
+    id: `${runId}-${groupCode}-${index}`,
+    name: `${groupTitle.replace(/\s+/g, "-")}-${index + 1}.png`,
+    type: "image/png",
+    status: "loading",
+    createdAt,
+  };
+}
+
+function replaceGroupImages(
+  run: WorkflowRunRecord,
+  groupId: string,
+  updater: (group: WorkflowRunOutputGroup) => WorkflowRunOutputGroup,
+) {
+  return finalizeRunRecord({
+    ...run,
+    outputs: run.outputs.map((group) => (group.id === groupId ? updater(group) : group)),
+  });
+}
+
+function createShellRunRecord(
+  runId: string,
+  createdAt: string,
+  mode: "generate" | "edit",
+  count: number,
+  defaultSize: AspectRatio,
+  processSummary: string,
+  sourceNodeIds: string[],
+  outputPlans: OutputPlan[],
+): WorkflowRunRecord {
+  const outputs = outputPlans.map((plan) => ({
+    id: `${runId}-${plan.code}-group`,
+    planId: plan.planId,
+    code: plan.code,
+    kind: plan.kind,
+    title: plan.title,
+    prompt: plan.prompt,
+    size: plan.size,
+    images: Array.from({ length: count }, (_, index) => makeLoadingImage(runId, plan.code, plan.title, index, createdAt)),
+  })) satisfies WorkflowRunOutputGroup[];
+
+  return finalizeRunRecord({
+    id: runId,
+    createdAt,
+    mode,
+    count,
+    size: defaultSize,
+    prompt: buildRunPrompt(outputs),
+    processSummary,
+    sourceNodeIds,
+    outputs,
+    totalImages: outputs.reduce((total, group) => total + group.images.length, 0),
+  });
+}
+
+function createReferenceExecutor(prepared: ReturnType<typeof buildExecutionPlans>) {
   const referenceImages = prepared.referenceNodes
     .flatMap((node) => sortReferenceImages(node.payload.images, node.payload.primaryImageId))
     .filter((image) => image.dataUrl)
     .slice(0, 3);
-
-  const count = prepared.processNode.payload.outputCount;
-  const totalTasks = prepared.outputPlans.length * count;
-  if (totalTasks > MAX_TASKS_PER_RUN) {
-    throw new Error(`当前配置会生成 ${totalTasks} 张图，超过单次上限 ${MAX_TASKS_PER_RUN} 张，请减少详情模块或每个版块候选数。`);
-  }
-
-  const mode = referenceImages.length > 0 ? "edit" : "generate";
-  const runId = makeId();
-  const createdAt = new Date().toISOString();
-  const outputs: WorkflowRunOutputGroup[] = [];
+  const mode: "generate" | "edit" = referenceImages.length > 0 ? "edit" : "generate";
   const fileCache = new Map<AspectRatio, File[]>();
 
   async function getReferenceFilesForSize(size: AspectRatio) {
@@ -614,9 +746,9 @@ export async function executeResultNode(product: ProductRecord, resultNodeId: st
     return files;
   }
 
-  for (const plan of prepared.outputPlans) {
-    const files = mode === "edit" ? await getReferenceFilesForSize(plan.size) : [];
-    const tasks = Array.from({ length: count }, async (_, index) => {
+  async function generateOne(plan: OutputPlan, imageIndex: number, runId: string, createdAt: string) {
+    try {
+      const files = mode === "edit" ? await getReferenceFilesForSize(plan.size) : [];
       const response =
         mode === "edit"
           ? await editImage(files, {
@@ -639,70 +771,231 @@ export async function executeResultNode(product: ProductRecord, resultNodeId: st
       }
 
       return {
-        id: `${runId}-${plan.code}-${index}`,
-        name: `${plan.title.replace(/\s+/g, "-")}-${index + 1}.png`,
+        id: `${runId}-${plan.code}-${imageIndex}`,
+        name: `${plan.title.replace(/\s+/g, "-")}-${imageIndex + 1}.png`,
         type: "image/png",
         dataUrl: base64ToDataUrl(first.b64_json),
         status: "success" as const,
         createdAt,
       } satisfies GeneratedImageAsset;
-    });
+    } catch (error) {
+      return {
+        id: `${runId}-${plan.code}-${imageIndex}`,
+        name: `${plan.title.replace(/\s+/g, "-")}-${imageIndex + 1}.png`,
+        type: "image/png",
+        status: "error" as const,
+        createdAt,
+        error: error instanceof Error ? error.message : "生成失败",
+      } satisfies GeneratedImageAsset;
+    }
+  }
 
-    const settled = await Promise.allSettled(tasks);
-    const images = settled.map((item, index) =>
-      item.status === "fulfilled"
-        ? item.value
-        : {
-            id: `${runId}-${plan.code}-${index}`,
-            name: `${plan.title.replace(/\s+/g, "-")}-${index + 1}.png`,
-            type: "image/png",
-            status: "error" as const,
-            createdAt,
-            error: item.reason instanceof Error ? item.reason.message : "生成失败",
-          },
-    );
+  return {
+    mode,
+    async runPlan(plan: OutputPlan, count: number, runId: string, createdAt: string, onImage: (index: number, image: GeneratedImageAsset) => void) {
+      await Promise.all(
+        Array.from({ length: count }, async (_, index) => {
+          const image = await generateOne(plan, index, runId, createdAt);
+          onImage(index, image);
+        }),
+      );
+    },
+  };
+}
 
-    outputs.push({
-      id: makeId(),
-      planId: plan.planId,
-      code: plan.code,
-      kind: plan.kind,
-      title: plan.title,
-      prompt: plan.prompt,
-      size: plan.size,
-      images,
-      error: images.every((image) => image.status === "error") ? "该版块全部生成失败" : undefined,
+function publishProgress(
+  product: ProductRecord,
+  resultNodeId: string,
+  run: WorkflowRunRecord,
+  options: ExecuteRunOptions | undefined,
+  mode: "prepend" | "replace",
+  message: string,
+) {
+  const finalizedRun = finalizeRunRecord(run);
+  const nextProduct = upsertRunRecord(product, resultNodeId, finalizedRun, mode);
+  options?.onProgress?.({
+    product: nextProduct,
+    run: finalizedRun,
+    completedImages: countCompletedImages(finalizedRun.outputs),
+    totalImages: finalizedRun.totalImages,
+    message,
+  });
+  return {
+    product: nextProduct,
+    run: finalizedRun,
+  };
+}
+
+export async function executeResultNode(product: ProductRecord, resultNodeId: string, options?: ExecuteRunOptions) {
+  const prepared = buildExecutionPlans(product, resultNodeId);
+  const count = prepared.processNode.payload.outputCount;
+  const totalTasks = prepared.outputPlans.length * count;
+  if (totalTasks > MAX_TASKS_PER_RUN) {
+    throw new Error(`当前配置会生成 ${totalTasks} 张图，超过单次上限 ${MAX_TASKS_PER_RUN} 张，请减少详情模块或每个版块候选数。`);
+  }
+
+  const executor = createReferenceExecutor(prepared);
+  const runId = makeId();
+  const createdAt = new Date().toISOString();
+  let currentRun = createShellRunRecord(
+    runId,
+    createdAt,
+    executor.mode,
+    count,
+    prepared.processNode.payload.aspectRatio,
+    buildProcessSummary(prepared.processNode.payload),
+    unique(prepared.upstreamNodes.map((node) => node.id)),
+    prepared.outputPlans,
+  );
+  let currentProduct = prepared.product;
+
+  ({ product: currentProduct, run: currentRun } = publishProgress(
+    currentProduct,
+    prepared.resultNode.id,
+    currentRun,
+    options,
+    "prepend",
+    `已创建 ${currentRun.outputs.length} 个版块的生成队列，开始逐张出图...`,
+  ));
+
+  for (const plan of prepared.outputPlans) {
+    const groupId = `${runId}-${plan.code}-group`;
+    await executor.runPlan(plan, count, runId, createdAt, (index, image) => {
+      currentRun = replaceGroupImages(currentRun, groupId, (group) => ({
+        ...group,
+        images: group.images.map((item, imageIndex) => (imageIndex === index ? image : item)),
+      }));
+      const completed = countCompletedImages(currentRun.outputs);
+      ({ product: currentProduct, run: currentRun } = publishProgress(
+        currentProduct,
+        prepared.resultNode.id,
+        currentRun,
+        options,
+        "replace",
+        `已生成 ${completed}/${currentRun.totalImages} 张：${plan.title} · 第 ${index + 1} 张`,
+      ));
     });
   }
 
-  const failedCount = outputs.flatMap((group) => group.images).filter((image) => image.status === "error").length;
-  const totalImages = outputs.reduce((total, group) => total + group.images.length, 0);
-  const runRecord: WorkflowRunRecord = {
-    id: runId,
-    createdAt,
-    mode,
-    count,
-    size: prepared.processNode.payload.aspectRatio,
-    prompt: prepared.outputPlans.map((plan, index) => `### ${index + 1}. ${plan.title}（${plan.size}）\n${plan.prompt}`).join("\n\n---\n\n"),
-    processSummary: buildProcessSummary(prepared.processNode.payload),
-    sourceNodeIds: unique(prepared.upstreamNodes.map((node) => node.id)),
-    outputs,
-    totalImages,
-    error: failedCount > 0 ? `其中 ${failedCount} 张生成失败` : undefined,
-  };
-
-  const nextProduct = updateNode(prepared.product, prepared.resultNode.id, (node) => ({
-    ...(node as WorkflowNode<"result">),
-    payload: {
-      ...(node as WorkflowNode<"result">).payload,
-      history: [runRecord, ...(node as WorkflowNode<"result">).payload.history].slice(0, 12),
-    },
-  }));
+  ({ product: currentProduct, run: currentRun } = publishProgress(
+    currentProduct,
+    prepared.resultNode.id,
+    currentRun,
+    options,
+    "replace",
+    `生成完成：已产出 ${currentRun.outputs.length} 个版块，共 ${currentRun.totalImages} 张图片。`,
+  ));
 
   return {
-    product: nextProduct,
-    run: runRecord,
-    prompt: runRecord.prompt,
+    product: currentProduct,
+    run: currentRun,
+    prompt: currentRun.prompt,
+  };
+}
+
+export async function retryResultOutputGroup(
+  product: ProductRecord,
+  options: {
+    resultNodeId: string;
+    runId: string;
+    groupId: string;
+    onProgress?: (payload: ExecutionProgress) => void;
+  },
+) {
+  const resultNode = getNodeById(product.workflow, options.resultNodeId) as WorkflowNode<"result"> | undefined;
+  if (!resultNode) {
+    throw new Error("未找到结果节点");
+  }
+
+  const targetRun = resultNode.payload.history.find((run) => run.id === options.runId);
+  if (!targetRun) {
+    throw new Error("未找到要重试的运行记录");
+  }
+
+  const targetGroup = targetRun.outputs.find((group) => group.id === options.groupId);
+  if (!targetGroup) {
+    throw new Error("未找到要重试的版块");
+  }
+
+  const prepared = buildExecutionPlans(product, options.resultNodeId);
+  const count = targetGroup.images.length || prepared.processNode.payload.outputCount;
+  const matchedPlan =
+    prepared.outputPlans.find((plan) => plan.planId === targetGroup.planId) ||
+    ({
+      planId: targetGroup.planId,
+      code: targetGroup.code,
+      kind: targetGroup.kind,
+      title: targetGroup.title,
+      size: targetGroup.size || targetRun.size,
+      prompt: targetGroup.prompt,
+    } satisfies OutputPlan);
+
+  const executor = createReferenceExecutor(prepared);
+  const createdAt = new Date().toISOString();
+  let currentRun = finalizeRunRecord({
+    ...targetRun,
+    createdAt,
+    mode: executor.mode,
+    count,
+    size: prepared.processNode.payload.aspectRatio,
+    processSummary: buildProcessSummary(prepared.processNode.payload),
+    sourceNodeIds: unique(prepared.upstreamNodes.map((node) => node.id)),
+    outputs: targetRun.outputs.map((group) =>
+      group.id === targetGroup.id
+        ? {
+            ...group,
+            prompt: matchedPlan.prompt,
+            size: matchedPlan.size,
+            images: Array.from({ length: count }, (_, index) =>
+              makeLoadingImage(targetRun.id, matchedPlan.code, matchedPlan.title, index, createdAt),
+            ),
+            error: undefined,
+          }
+        : group,
+    ),
+  });
+  let currentProduct = prepared.product;
+
+  ({ product: currentProduct, run: currentRun } = publishProgress(
+    currentProduct,
+    options.resultNodeId,
+    currentRun,
+    options,
+    "replace",
+    `开始重试版块：${matchedPlan.title}`,
+  ));
+
+  await executor.runPlan(matchedPlan, count, targetRun.id, createdAt, (index, image) => {
+    currentRun = replaceGroupImages(currentRun, targetGroup.id, (group) => ({
+      ...group,
+      prompt: matchedPlan.prompt,
+      size: matchedPlan.size,
+      images: group.images.map((item, imageIndex) => (imageIndex === index ? image : item)),
+    }));
+    const completed = countCompletedImages(currentRun.outputs);
+    ({ product: currentProduct, run: currentRun } = publishProgress(
+      currentProduct,
+      options.resultNodeId,
+      currentRun,
+      options,
+      "replace",
+      `重试中 ${completed}/${currentRun.totalImages}：${matchedPlan.title} · 第 ${index + 1} 张`,
+    ));
+  });
+
+  ({ product: currentProduct, run: currentRun } = publishProgress(
+    currentProduct,
+    options.resultNodeId,
+    currentRun,
+    options,
+    "replace",
+    `版块重试完成：${matchedPlan.title}`,
+  ));
+
+  return {
+    product: currentProduct,
+    run: currentRun,
+    prompt: currentRun.prompt,
   };
 }
 

@@ -18,6 +18,7 @@ import {
   buildPromptPreview,
   executeResultNode,
   generateCopyForNode,
+  retryResultOutputGroup,
 } from "@/lib/workbench-engine";
 import { downloadDataUrl, makeId, readAsDataUrl } from "@/lib/storage";
 import {
@@ -182,6 +183,7 @@ export function ProductWorkbenchPage({ productId }: { productId: string }) {
   const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null);
   const [statusText, setStatusText] = useState("工作流节点变更会自动保存在浏览器本地。");
   const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
+  const [retryingGroupKeys, setRetryingGroupKeys] = useState<string[]>([]);
   const [promptPreview, setPromptPreview] = useState("");
 
   useEffect(() => {
@@ -404,9 +406,16 @@ export function ProductWorkbenchPage({ productId }: { productId: string }) {
   async function runResultNode(nodeId: string) {
     if (!product) return;
     setRunningNodeId(nodeId);
-    setStatusText("正在生成图片，请稍候...");
+    setStatusText("正在创建生成任务，请稍候...");
     try {
-      const execution = await executeResultNode(product, nodeId);
+      const execution = await executeResultNode(product, nodeId, {
+        onProgress: (progress) => {
+          patchProduct(() => progress.product);
+          setSelectedNodeId(nodeId);
+          setPromptPreview(progress.run.prompt);
+          setStatusText(progress.message);
+        },
+      });
       patchProduct(() => execution.product);
       setSelectedNodeId(nodeId);
       setPromptPreview(execution.prompt);
@@ -415,6 +424,34 @@ export function ProductWorkbenchPage({ productId }: { productId: string }) {
       setStatusText(error instanceof Error ? error.message : "运行失败");
     } finally {
       setRunningNodeId(null);
+    }
+  }
+
+  async function retryOutputGroup(resultNodeId: string, runId: string, groupId: string) {
+    if (!product) return;
+    const taskKey = `${runId}:${groupId}`;
+    setRetryingGroupKeys((current) => dedupeStrings([...current, taskKey]));
+    setStatusText("正在重试失败版块，请稍候...");
+    try {
+      const execution = await retryResultOutputGroup(product, {
+        resultNodeId,
+        runId,
+        groupId,
+        onProgress: (progress) => {
+          patchProduct(() => progress.product);
+          setSelectedNodeId(resultNodeId);
+          setPromptPreview(progress.run.prompt);
+          setStatusText(progress.message);
+        },
+      });
+      patchProduct(() => execution.product);
+      setSelectedNodeId(resultNodeId);
+      setPromptPreview(execution.prompt);
+      setStatusText("失败版块已完成重新生成。");
+    } catch (error) {
+      setStatusText(error instanceof Error ? error.message : "重试失败");
+    } finally {
+      setRetryingGroupKeys((current) => current.filter((item) => item !== taskKey));
     }
   }
 
@@ -795,6 +832,8 @@ export function ProductWorkbenchPage({ productId }: { productId: string }) {
                     copyNodes={copyNodes}
                     running={runningNodeId === selectedNode.id}
                     onRun={() => void runResultNode(selectedNode.id)}
+                    onRetryGroup={(runId, groupId) => void retryOutputGroup(selectedNode.id, runId, groupId)}
+                    isRetryingGroup={(runId, groupId) => retryingGroupKeys.includes(`${runId}:${groupId}`)}
                     onPreviewPrompt={() => previewResultPrompt(selectedNode.id)}
                     onFillReference={(runId, imageId, referenceNodeId) => {
                       try {
@@ -1433,11 +1472,14 @@ function ProcessNodeInspector({
 
 function ResultNodeInspector({
   node,
+  product,
   promptPreview,
   referenceNodes,
   copyNodes,
   running,
   onRun,
+  onRetryGroup,
+  isRetryingGroup,
   onPreviewPrompt,
   onFillReference,
   onChange,
@@ -1450,6 +1492,8 @@ function ResultNodeInspector({
   copyNodes: WorkflowNode<"copy">[];
   running: boolean;
   onRun: () => void;
+  onRetryGroup: (runId: string, groupId: string) => void;
+  isRetryingGroup: (runId: string, groupId: string) => boolean;
   onPreviewPrompt: () => void;
   onFillReference: (runId: string, imageId: string, referenceNodeId?: string) => void;
   onChange: (payload: ResultNodePayload) => void;
@@ -1470,6 +1514,11 @@ function ResultNodeInspector({
         <button type="button" style={ghostButtonStyle} onClick={onPreviewPrompt}>
           预览最终 Prompt
         </button>
+        {latestRun ? (
+          <Link href={`/products/${product.id}/preview?runId=${latestRun.id}`} style={ghostButtonStyle}>
+            网页预览
+          </Link>
+        ) : null}
       </div>
       <TwoColumn>
         <ProductField label="本次固定生成">
@@ -1548,7 +1597,18 @@ function ResultNodeInspector({
                   {formatTime(run.createdAt)} · {run.mode === "edit" ? "图生图" : "文生图"} · {run.size} · 共 {run.totalImages} 张
                 </div>
               </div>
-              {run.error ? <div style={errorBadgeStyle}>{run.error}</div> : <div style={successBadgeStyle}>成功</div>}
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <Link href={`/products/${product.id}/preview?runId=${run.id}`} style={smallButtonStyle}>
+                  网页预览
+                </Link>
+                {run.outputs.some((group) => group.images.some((image) => image.status === "loading")) ? (
+                  <div style={loadingBadgeStyle}>生成中</div>
+                ) : run.error ? (
+                  <div style={errorBadgeStyle}>{run.error}</div>
+                ) : (
+                  <div style={successBadgeStyle}>成功</div>
+                )}
+              </div>
             </div>
             <div style={miniHintStyle}>{run.processSummary}</div>
             <div style={moduleRunListStyle}>
@@ -1561,7 +1621,20 @@ function ResultNodeInspector({
                         {group.kind === "main" ? "主图版块" : "详情模块"} · {group.size || run.size} · {group.images.length} 张
                       </div>
                     </div>
-                    {group.error ? <div style={errorBadgeStyle}>{group.error}</div> : null}
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      {group.images.some((image) => image.status === "loading") ? <div style={loadingBadgeStyle}>生成中</div> : null}
+                      {group.images.some((image) => image.status === "error") ? (
+                        <button
+                          type="button"
+                          style={smallButtonStyle}
+                          disabled={isRetryingGroup(run.id, group.id)}
+                          onClick={() => onRetryGroup(run.id, group.id)}
+                        >
+                          {isRetryingGroup(run.id, group.id) ? "重试中..." : "重新生成此版块"}
+                        </button>
+                      ) : null}
+                      {group.error ? <div style={errorBadgeStyle}>{group.error}</div> : null}
+                    </div>
                   </div>
                   <div style={resultGridStyle}>
                     {group.images.map((image) => (
@@ -1584,6 +1657,8 @@ function ResultNodeInspector({
                               </button>
                             </div>
                           </>
+                        ) : image.status === "loading" ? (
+                          <div style={resultLoadingStyle}>正在生成第 {group.images.findIndex((item) => item.id === image.id) + 1} 张...</div>
                         ) : (
                           <div style={resultFallbackStyle}>{image.error || "生成失败"}</div>
                         )}
@@ -2042,6 +2117,14 @@ const successBadgeStyle: CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
 };
+const loadingBadgeStyle: CSSProperties = {
+  borderRadius: 999,
+  padding: "6px 10px",
+  background: "#eff6ff",
+  color: "#1d4ed8",
+  fontSize: 12,
+  fontWeight: 700,
+};
 const errorBadgeStyle: CSSProperties = {
   borderRadius: 999,
   padding: "6px 10px",
@@ -2092,6 +2175,16 @@ const resultFallbackStyle: CSSProperties = {
   fontSize: 12,
   padding: 12,
   textAlign: "center",
+};
+const resultLoadingStyle: CSSProperties = {
+  minHeight: 120,
+  display: "grid",
+  placeItems: "center",
+  color: "#1d4ed8",
+  fontSize: 12,
+  padding: 12,
+  textAlign: "center",
+  background: "linear-gradient(135deg, #eff6ff, #f8fafc)",
 };
 const previewOverlayStyle: CSSProperties = {
   position: "fixed",
